@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------ */
+/* Playstage design tokens — light digital minimalist                  */
+/* ------------------------------------------------------------------ */
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* surfaces */
+  --color-stage-canvas: #f2f2f0;
+  --color-stage-panel: #ffffff;
+  --color-stage-shell: #fbfbfa;
+  --color-stage-field: #f7f7f6;
+
+  /* lines */
+  --color-stage-line: #e7e7e3;
+  --color-stage-line-strong: #d6d6d1;
+
+  /* type */
+  --color-stage-ink: #1a1a18;
+  --color-stage-muted: #8a8a85;
+  --color-stage-faint: #b4b4ae;
+
+  /* accents */
+  --color-stage-accent: #2f6fed;
+  --color-stage-accent-soft: #eaf0fe;
+  --color-stage-positive: #0f9b76;
+  --color-stage-warn: #d9683a;
+
+  /* grid */
+  --color-stage-grid-cell: #dededa;
+  --color-stage-grid-section: #c6c6c0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--color-stage-shell);
+  color: var(--color-stage-ink);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* The app-wide `user-select: none` above stops Chromium from starting an
+   HTML5 drag on an element's content, even when draggable="true" is set.
+   This opts draggable elements back in. */
+[draggable="true"] {
+  -webkit-user-drag: element;
+}
+
+/* Strip spinner arrows off number inputs — they fight with drag-to-scrub
+   later and eat horizontal space in the inspector. */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #dcdcd7;
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #c4c4bd;
+  background-clip: content-box;
+}

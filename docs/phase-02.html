@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Playstage — Phase 02: Direct Manipulation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="doc.css" />
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <p class="eyebrow">Milestone 02 · <a href="roadmap.html">back to roadmap</a></p>
+    <h1>Direct manipulation</h1>
+    <p class="lede">Blocking out a scene should feel like handling objects, not filling in a form. This phase replaces numeric-only editing with gizmos, snapping, keys, grouping, and an undo stack.</p>
+    <div class="meta">
+      <span class="chip live">2a gizmos · done</span>
+      <span class="chip live">2b undo/redo · done</span>
+      <span class="chip live">2c grouping · done</span>
+      <span class="chip live">2d primitive params · done</span>
+      <span class="chip live">2e outliner polish · done</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<nav class="toc">
+  <div class="toc-label">Contents</div>
+  <a href="#status"><span class="num">01</span>Status</a>
+  <a href="#gizmos"><span class="num">02</span>Gizmos</a>
+  <a href="#snapping"><span class="num">03</span>Snapping</a>
+  <a href="#keys"><span class="num">04</span>Shortcuts</a>
+  <a href="#split"><span class="num">05</span>The store split</a>
+  <a href="#history"><span class="num">06</span>Undo / redo</a>
+  <a href="#grouping"><span class="num">07</span>Grouping</a>
+  <a href="#params"><span class="num">08</span>Primitive params</a>
+  <a href="#outliner"><span class="num">09</span>Outliner polish</a>
+  <a href="#remaining"><span class="num">10</span>Deferred</a>
+</nav>
+
+<main>
+
+<section id="status">
+  <h2><span class="num">01</span>Status</h2>
+  <p class="section-sub">Phase 02 is being built in four sub-chunks. Each is shippable on its own.</p>
+
+  <ul class="check">
+    <li class="on"><span class="mark">✓</span><span><strong>2a — Gizmos, snapping, shortcuts.</strong> Translate / rotate / scale handles in the viewport, toggleable snapping with editable step sizes, and a global keymap.</span></li>
+    <li class="on"><span class="mark">✓</span><span><strong>2b — Undo / redo.</strong> Snapshot history over the document store, with gizmo drags and typing collapsing into single entries.</span></li>
+    <li class="on"><span class="mark">✓</span><span><strong>2c — Grouping.</strong> Nested scene graph, outliner tree with drag-to-reparent, world-preserving reparent maths.</span></li>
+    <li class="on"><span class="mark">✓</span><span><strong>2d — Primitive parameters.</strong> Spec-driven numeric fields with clamping, plus a number input that does not fight the typist.</span></li>
+    <li class="on"><span class="mark">✓</span><span><strong>2e — Outliner polish.</strong> Deep duplicate (bug fix), sibling reordering, collapsible groups.</span></li>
+  </ul>
+
+  <h3>Files touched so far</h3>
+<pre class="tree">src/
+├─ store/
+│  ├─ <span class="new">editorStore.ts</span>        2a — selection, gizmo mode, snapping
+│  ├─ <span class="new">historyStore.ts</span>       2b — undo/redo stacks
+│  ├─ <span class="new">devFreeze.ts</span>          2b — dev-only mutation guard
+│  ├─ <span class="new">nodeStore.ts</span>          2c — live Three nodes by object id
+│  └─ sceneStore.ts        document + history + hierarchy actions
+├─ types/
+│  └─ scene.ts             2d — param specs, derived defaults, clamp
+├─ geometry/
+│  ├─ buildGeometry.ts
+│  └─ <span class="new">transforms.ts</span>         2c — world/local matrix maths
+├─ <span class="new">scene/</span>
+│  └─ <span class="new">hierarchy.ts</span>          2e — pure list ops, directly tested
+├─ <span class="new">hooks/</span>
+│  └─ <span class="new">useKeyboardShortcuts.ts</span>  one global keydown listener
+├─ components/
+│  ├─ SceneObjectView.tsx  recursive render, dispose lifecycle
+│  ├─ <span class="new">SelectionGizmo.tsx</span>    2c — gizmo, mounted at scene root
+│  ├─ Viewport.tsx         orbit/gizmo handoff, drag-aware deselect
+│  ├─ Toolbar.tsx          undo/redo, mode switch, snap controls
+│  ├─ Outliner.tsx         tree + drag-to-reparent + key legend
+│  ├─ <span class="new">NumberField.tsx</span>       2d — draft-state numeric input
+│  └─ Inspector.tsx        transform + shape params
+└─ App.tsx                 installs the keymap
+
+scripts/
+├─ <span class="new">verify-transforms.mjs</span>   2c — reparent maths test harness
+├─ <span class="new">verify-params.mjs</span>       2d — spec/builder consistency check
+└─ <span class="new">verify-hierarchy.mjs</span>    2e — imports the real source
+
+npm run verify            runs all three</pre>
+</section>
+
+<section id="gizmos">
+  <h2><span class="num">02</span>Gizmos</h2>
+  <p class="section-sub">How the handles attach, and how their output gets back into the document.</p>
+
+  <p>Each <code>SceneObjectView</code> renders its own <code>TransformControls</code> when it is the selected object. The gizmo attaches to that object's group via the <code>object</code> prop rather than wrapping it as a child, so the group's transform stays driven by the store in the normal way.</p>
+
+  <h3>Why the gizmo is 3D and not a 2D overlay</h3>
+  <p>The handles live in the scene rather than being drawn over it. That sounds like it should cause collisions, but <code>TransformControls</code> isolates itself: its materials run with <code>depthTest</code> and <code>depthWrite</code> off at a high render order so nothing can occlude them, and it raycasts with its own raycaster against invisible oversized picker volumes, separate from R3F's event system. Grabbing a handle never falls through to the mesh behind it.</p>
+  <p>The argument for 3D is that the drag maths is 3D regardless — translating along an axis under perspective means intersecting the pointer ray with a plane containing that axis. A 2D overlay would still need all of that, plus hand-rolled projection to place the handles each frame, and would lose correct foreshortening on axis arrows and near/far arcs on rotation rings. 2D is the right tool for <em>information</em> layered on the gizmo (live numeric readouts, axis labels) rather than for the handles themselves.</p>
+
+  <div class="callout watch">
+    <span class="k">Export gotcha</span>
+    <p>The gizmo is in the scene graph, so a naive render-to-PNG in phase 06 would bake blue arrows into the exported frame. Hide or detach it before the export render pass.</p>
+  </div>
+
+  <h3>The callback-ref trick</h3>
+  <p>A plain <code>useRef</code> would still be <code>null</code> on the render where the gizmo wants to mount — refs populate after commit, and nothing triggers a second render. Storing the node in state via a callback ref forces that extra render:</p>
+
+<pre><code><span class="kw">const</span> [node, setNode] = useState&lt;THREE.Group | <span class="kw">null</span>&gt;(<span class="kw">null</span>);
+
+&lt;group ref={setNode} position={…} rotation={…} scale={…}&gt;…&lt;/group&gt;
+
+{isSelected &amp;&amp; node &amp;&amp; (
+  &lt;TransformControls object={node} mode={transformMode} … /&gt;
+)}</code></pre>
+
+  <h3>Committing back to the store</h3>
+  <p>The gizmo mutates the Object3D directly, outside React. <code>onObjectChange</code> reads that live state back into the scene store, which keeps the properties panel's numbers in sync while you drag.</p>
+
+  <div class="callout watch">
+    <span class="k">frameloop demand</span>
+    <p>Because the canvas only renders on demand, a gizmo drag would otherwise freeze mid-motion — the mutation happens outside the render cycle, so nothing asks for a frame. <code>commitTransform</code> calls <code>invalidate()</code> explicitly. Any future out-of-React animation needs the same.</p>
+  </div>
+
+  <h3>Orbit handoff</h3>
+  <p>OrbitControls is marked <code>makeDefault</code>, which lets TransformControls find and suspend it while a handle is being dragged. On top of that, <code>isDragging</code> in the editor store gates two things: orbit is explicitly disabled mid-drag, and <code>onPointerMissed</code> refuses to clear the selection when a drag happens to end over empty space — otherwise letting go of a handle in the wrong spot would deselect the thing you were just moving.</p>
+</section>
+
+<section id="snapping">
+  <h2><span class="num">03</span>Snapping</h2>
+  <p class="section-sub">On by default, because architectural blocking wants alignment more than freedom.</p>
+
+  <table>
+    <thead><tr><th>Axis</th><th>Default</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>translate</td><td>0.25 units</td><td>Quarter-metre grid. Editable from the toolbar.</td></tr>
+      <tr><td>rotate</td><td>15°</td><td>Stored in degrees, converted to radians at the gizmo.</td></tr>
+      <tr><td>scale</td><td>0.1</td><td>Multiplier step.</td></tr>
+    </tbody>
+  </table>
+
+  <p>All three are gated behind one <code>snapEnabled</code> switch, toggled from the toolbar or with <code>X</code>. When off, the gizmo's snap props are passed as <code>null</code>, which is what Three.js expects for "no snapping" — passing <code>0</code> would snap everything to the origin.</p>
+</section>
+
+<section id="keys">
+  <h2><span class="num">04</span>Shortcuts</h2>
+  <p class="section-sub">One global listener, installed once in <code>App</code>.</p>
+
+  <table>
+    <thead><tr><th>Key</th><th>Action</th><th>While typing</th></tr></thead>
+    <tbody>
+      <tr><td>Ctrl+Z</td><td>Undo</td><td>Active</td></tr>
+      <tr><td>Ctrl+⇧Z / Ctrl+Y</td><td>Redo</td><td>Active</td></tr>
+      <tr><td>W / E / R</td><td>Move, rotate, scale gizmo</td><td>Ignored</td></tr>
+      <tr><td>X</td><td>Toggle snapping</td><td>Ignored</td></tr>
+      <tr><td>H</td><td>Hide / show selected</td><td>Ignored</td></tr>
+      <tr><td>Ctrl+D</td><td>Duplicate selected</td><td>Ignored</td></tr>
+      <tr><td>Del / Backspace</td><td>Delete selected</td><td>Ignored</td></tr>
+      <tr><td>Esc</td><td>Deselect</td><td>Ignored</td></tr>
+    </tbody>
+  </table>
+
+  <p>The handler reads both stores through <code>getState()</code> rather than subscribing. That keeps it to a single listener for the lifetime of the app instead of tearing down and rebinding every time the selection changes.</p>
+
+  <p>Bare-letter shortcuts bail out when the event target is an input, textarea, select, or contenteditable — otherwise typing "Wrecked wall" in the name field would flip gizmo modes three times. Undo and redo deliberately stay live even in a field: in an editor like this, Ctrl+Z means "undo my last edit to the scene", not "undo my last keystroke in this box", and the coalescing described below already makes field typing a single history entry.</p>
+</section>
+
+<section id="split">
+  <h2><span class="num">05</span>The store split</h2>
+  <p class="section-sub">Why selection moved out of the scene store.</p>
+
+  <p>Phase 01 kept <code>selectedId</code> in <code>sceneStore</code> alongside the objects. That was fine until undo entered the picture. Undo snapshots the document — and if selection lives in the document, Ctrl+Z starts re-selecting whatever was selected three edits ago. Same for gizmo mode and snap settings.</p>
+
+  <table>
+    <thead><tr><th>Store</th><th>Holds</th><th>Saved?</th><th>Undoable?</th></tr></thead>
+    <tbody>
+      <tr><td>sceneStore</td><td>objects, hotspots, textures, name, dirty flag</td><td>Yes</td><td>Yes</td></tr>
+      <tr><td>editorStore</td><td>selection, gizmo mode, snap settings, drag state</td><td>No</td><td>No</td></tr>
+      <tr><td>historyStore</td><td>past / future stacks, batch and coalesce bookkeeping</td><td>No</td><td>—</td></tr>
+    </tbody>
+  </table>
+
+  <p>A few scene actions still need to touch selection — deleting the selected object should clear it, adding one should select it. Those reach across with <code>useEditorStore.getState()</code> rather than returning a value for the caller to act on, which keeps call sites simple.</p>
+</section>
+
+<section id="history">
+  <h2><span class="num">06</span>Undo / redo</h2>
+  <p class="section-sub">Snapshot history, 100 entries deep, with batching and coalescing so one gesture is one step.</p>
+
+  <h3>Snapshots, not diffs</h3>
+  <p>Each entry is a shallow copy of the document's four fields: name, objects, hotspots, textures. No deep cloning. That is safe because every mutating action builds new arrays and objects rather than editing in place — <code>objects.map(o =&gt; o.id === id ? {...o, …} : o)</code> and friends. An old snapshot can never be changed out from under the stack.</p>
+
+  <p>It is also why the memory cost is negligible: in a hundred-object scene, moving one box produces a snapshot that shares ninety-nine object references with the previous one. Only the array and the single changed object are new.</p>
+
+  <div class="callout why">
+    <span class="k">The rule this depends on</span>
+    <p>Never mutate a <code>SceneObject</code> in place — meaning never write <code>obj.name = "Wall"</code>; always build a replacement with <code>{ ...obj, name: "Wall" }</code>. This is about how the code writes a change, not about what the user can edit; it constrains no feature.</p>
+    <p>An in-place write reaches <em>through</em> every history entry holding a reference to that object and rewrites what those entries remember. The symptom is "undo doesn't work sometimes", which points nowhere near the cause.</p>
+  </div>
+
+  <h3>Enforcing it instead of trusting it</h3>
+  <p>A convention you can break by accident, whose failure mode is silent, is worth making loud. <code>devFreeze.ts</code> deep-freezes the document after every state change, so an in-place write throws a <code>TypeError</code> at the offending line rather than quietly corrupting the past. It is gated on <code>import.meta.env.DEV</code> and stripped from production builds.</p>
+
+  <p>Children are frozen before their parents, which establishes "frozen parent implies frozen descendants". That lets the walk return early on anything already frozen, so the cost rides on structural sharing rather than fighting it: after editing one object in a hundred-object scene, the walk visits the new array and the one new object, and bounces off the other ninety-nine in a single check each.</p>
+
+  <table>
+    <thead><tr><th>Pattern</th><th>Under freeze</th></tr></thead>
+    <tbody>
+      <tr><td>obj.name = x</td><td>Throws — this is the point</td></tr>
+      <tr><td>obj.transform.position[0] = x</td><td>Throws — freezing is deep</td></tr>
+      <tr><td>objects.push(…)</td><td>Throws — arrays are frozen too</td></tr>
+      <tr><td>map + spread</td><td>Fine</td></tr>
+      <tr><td>[...objects, next]</td><td>Fine</td></tr>
+      <tr><td>filter</td><td>Fine</td></tr>
+      <tr><td>structuredClone</td><td>Fine — the copy is mutable</td></tr>
+    </tbody>
+  </table>
+
+  <p>Only the document slice is frozen. Editor state is never snapshotted, so mutating it cannot corrupt anything and it is left alone.</p>
+
+  <h3>Dependency direction</h3>
+  <p><code>historyStore</code> is a dumb container — it holds <code>past</code>, <code>future</code>, and the bookkeeping fields, with no actions at all. Everything that pushes, pops and applies snapshots lives in <code>sceneStore</code> and drives history through <code>setState</code>. Keeping it one-directional (<code>sceneStore → historyStore</code>) avoids a circular import, since history needs to write back into the scene to time-travel.</p>
+
+  <h3>Batching: one drag, one entry</h3>
+  <p>A gizmo drag fires <code>onObjectChange</code> on every mouse move, each of which writes to the store. Without intervention that is sixty undo steps per second.</p>
+
+  <p><code>beginBatch(key)</code> records the pre-drag snapshot and then closes a gate; while <code>batchKey</code> is set, <code>record()</code> returns immediately. <code>endBatch()</code> reopens it. The gizmo calls these from <code>onMouseDown</code> and <code>onMouseUp</code>.</p>
+
+  <div class="callout watch">
+    <span class="k">Ordering matters</span>
+    <p>On mouse-up, the final <code>commitTransform()</code> has to run <em>before</em> <code>endBatch()</code>. Reverse them and that last write lands outside the batch and shows up as a spurious second undo entry — so undoing a drag would take two presses, with the first appearing to do nothing.</p>
+  </div>
+
+  <h3>Coalescing: one gesture, one entry</h3>
+  <p>Typing a name or nudging an inspector number has no mouse-down/up pair to hook, so those use a time window instead. <code>record()</code> takes a key and a <code>coalesce</code> flag; repeated edits with the same key inside 600ms refresh the timestamp rather than pushing a new entry. Keys are scoped per object (<code>rename:&lt;id&gt;</code>, <code>transform:&lt;id&gt;</code>) so editing two objects in quick succession stays two steps.</p>
+
+  <h3>Other details</h3>
+  <ul>
+    <li>Any new edit clears the <code>future</code> stack — standard linear-history behaviour, no branching.</li>
+    <li>Time-travelling prunes the selection if the selected object does not exist in the restored snapshot.</li>
+    <li><code>newScene</code> and <code>loadScene</code> wipe history entirely — you should not be able to undo across a file boundary back into the previous document.</li>
+    <li>Undo and redo both refuse to run mid-batch, so a drag cannot be interrupted halfway.</li>
+    <li>Undo sets the dirty flag. The document differs from what is on disk either way.</li>
+    <li>The dev freeze guard above is what keeps the reference-sharing honest as new actions get written.</li>
+  </ul>
+</section>
+
+<section id="grouping">
+  <h2><span class="num">07</span>Grouping</h2>
+  <p class="section-sub">Nesting in the scene graph, a tree outliner, and reparenting that does not move anything.</p>
+
+  <h3>World-preserving reparent</h3>
+  <p>Dragging an object into a group does not move it. Its world transform is held fixed and the difference is baked into a new local transform:</p>
+
+<pre><code>newLocal = inverse(parentWorld) × currentWorld</code></pre>
+
+  <p>The alternative — keeping the local transform and letting the object jump to wherever that lands relative to its new parent — is almost never what anyone wants. By the time you are grouping things, you have already placed them.</p>
+
+  <p>The maths runs off the store's flat object list, not the live Three.js scene graph, walking the <code>parentId</code> chain to compose world matrices. The store is the source of truth; the scene graph is a projection of it, and a reparent happens inside a store action before the renderer has caught up.</p>
+
+  <div class="callout note">
+    <span class="k">Verified, not assumed</span>
+    <p><code>scripts/verify-transforms.mjs</code> asserts the world matrix is identical before and after reparenting, across translated, rotated, scaled and fully-composed parents, into groups, out of groups, between groups, and through a four-deep chain. It also covers the refusal cases. Run it with <code>node scripts/verify-transforms.mjs</code> after touching the maths.</p>
+  </div>
+
+  <div class="callout watch">
+    <span class="k">Known limitation</span>
+    <p>Decomposing a matrix back into position / Euler / scale cannot represent shear. Parent a rotated object under a non-uniformly scaled group and the result is the closest shear-free approximation, not an exact match — so it can shift slightly. Three.js has the same limitation anywhere it decomposes. Avoiding non-uniform scale on groups sidesteps it entirely; a later fix would be storing a raw matrix on the object instead of a TRS triple.</p>
+  </div>
+
+  <h3>Cycles</h3>
+  <p><code>canReparent</code> refuses self-parenting and refuses any target that is already a descendant of the object being moved. The outliner calls the same function to decide whether a row is a legal drop target, so the UI never offers a drop the store would silently reject. World-matrix composition also carries a <code>seen</code> set, so a cycle arriving from a hand-edited scene file cannot hang the app.</p>
+
+  <h3>Why the gizmo moved to the scene root</h3>
+  <p>Previously each object rendered its own <code>TransformControls</code>. That breaks the moment objects nest: a gizmo mounted inside a group inherits that group's matrix, so a child of a 0.2-scaled group gets handles a fifth of their intended size, rotated and offset along with the parent.</p>
+
+  <p>The gizmo is now a single <code>SelectionGizmo</code> at the root of the scene. It finds its target through <code>nodeStore</code>, a registry of live Three objects keyed by scene object id, which each <code>SceneObjectView</code> writes itself into on mount. Handles stay in world space; the values written back are still local, because that is what TransformControls mutates and Three handles the parent matrices.</p>
+
+  <div class="callout why">
+    <span class="k">Three stores, three lifetimes</span>
+    <p><code>nodeStore</code> holds live mutable Three objects and is deliberately separate from the document. It is never saved, never snapshotted, and never frozen — it is a view-layer index, not state.</p>
+  </div>
+
+  <h3>Rendering and the outliner</h3>
+  <ul>
+    <li>The viewport renders root objects only; each <code>SceneObjectView</code> recurses into its own children, so a parent's matrix cascades for free</li>
+    <li>Hiding a parent returns null and takes the whole subtree with it</li>
+    <li>A group is a transform container with no mesh — <code>geometry.kind === "group"</code> skips geometry entirely, and a selected empty group shows an axes marker at its origin since it has nothing to outline</li>
+    <li>Outliner rows are draggable; drop on a row to nest, drop on the empty list area to move back to the top level</li>
+    <li>Drop targets are validated on hover rather than only on drop, which needs the dragged id in React state — <code>dragover</code> cannot read <code>DataTransfer</code> contents for security reasons</li>
+  </ul>
+
+  <div class="callout watch">
+    <span class="k">Tauri on Windows swallows HTML5 drag</span>
+    <p>Outliner dragging silently does nothing until <code>dragDropEnabled</code> is set to <code>false</code> on the window in <code>tauri.conf.json</code>. It defaults to <code>true</code>, which hands drag events to the native OS file-drop handler before the webview sees them — so <code>dragstart</code> never fires in the page. Tauri's own docs call this out: disabling it is required to use HTML5 drag and drop on Windows.</p>
+    <p>The trade is that the app no longer receives native file-drop events. When texture import lands in phase 03, a dropped-file path will need a file dialog or a Rust-side listener rather than a webview drop target.</p>
+  </div>
+
+  <div class="callout watch">
+    <span class="k">user-select: none blocks drag too</span>
+    <p>A second, independent cause of the same symptom. Chromium will not start a drag on content inside a <code>user-select: none</code> subtree even when <code>draggable="true"</code> is set, and the app body sets exactly that to stop text selection during orbiting. <code>[draggable="true"] { -webkit-user-drag: element; }</code> in <code>styles.css</code> opts those elements back in.</p>
+  </div>
+
+  <div class="callout note">
+    <span class="k">MVP shape</span>
+    <p>Creating a group adds an empty one, then you drag objects onto it. The more natural "select three things and hit Group" needs multi-select, which does not exist yet. Worth adding, but it is its own chunk.</p>
+  </div>
+</section>
+
+<section id="params">
+  <h2><span class="num">08</span>Primitive parameters</h2>
+  <p class="section-sub">Editing a shape's own numbers — radius, height, segment counts — rather than only its transform.</p>
+
+  <h3>One spec table, not five panels</h3>
+  <p><code>PRIMITIVE_PARAMS</code> in <code>scene.ts</code> is now the single source of truth. Each entry carries a label, a default, a clamp range, an input step, and whether the value must be a whole number. <code>PRIMITIVE_DEFAULTS</code> is derived from it rather than maintained alongside it, and the inspector renders its fields by iterating the specs.</p>
+
+  <p>The practical effect is that adding a torus later means adding one block to that table. No new panel, no new defaults entry, no inspector change.</p>
+
+  <h3>Clamping, and where it lives</h3>
+  <table>
+    <thead><tr><th>Kind</th><th>Range</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>dimensions</td><td>0.01 – 1000</td><td>Zero-size geometry renders as nothing and is hard to recover from in the viewport.</td></tr>
+      <tr><td>cylinder radii</td><td>0 – 1000</td><td>Zero is legitimate here — it collapses one end to a point, which is a cone.</td></tr>
+      <tr><td>segment counts</td><td>3 – 128, integer</td><td>Past this there is no visible improvement at the scale this tool draws at, and a stray keystroke asking for 50,000 would hang the renderer building the buffers.</td></tr>
+    </tbody>
+  </table>
+
+  <p>Clamping happens in the store action, not only in the input. A value can also arrive from a loaded scene file or, later, a script; the renderer should not be reachable by any path that has not been bounded.</p>
+
+  <h3>A number input that does not fight you</h3>
+  <p>Binding an input straight to clamped store state breaks the moment someone clears the field to retype. The empty string parses as zero, zero clamps to the minimum, and the field snaps to "0.01" mid-keystroke. Typing a leading "-" or a lone "." does the same.</p>
+
+  <p><code>NumberField</code> keeps its own draft string. Edits commit upward whenever the draft parses to a finite number, but the displayed text stays exactly what was typed until focus leaves — at which point it resyncs from the store, which is how a clamp becomes visible rather than disruptive. External changes (a gizmo drag, an undo) update the field too, but never while it is focused.</p>
+
+  <p>The transform vector inputs now use the same component, so the behaviour is consistent across the panel.</p>
+
+  <h3>Rebuild cost</h3>
+  <p>Changing a parameter produces a new geometry spec object, which invalidates the geometry memo, builds a replacement, and disposes the old one. That is the dispose discipline from phase 01 doing its job for the first time under real churn.</p>
+
+  <p>Materials were being rebuilt alongside it for no reason, since their memo depended on the whole geometry spec. They now depend on the material <em>slot count</em>, which only changes when the primitive kind does — so editing a radius no longer disposes and recreates six box materials per keystroke.</p>
+
+  <div class="callout watch">
+    <span class="k">Still fine, but watch it later</span>
+    <p>Primitive geometry is cheap enough to rebuild per keystroke. Generated geometry in phase 04 is not: a boolean or an extrude rebuilt sixty times a second while scrubbing a slider will stall the main thread. That is where debouncing becomes mandatory rather than optional.</p>
+  </div>
+
+  <div class="callout note">
+    <span class="k">Verified, not assumed</span>
+    <p>Nothing in the type system ties <code>PRIMITIVE_PARAMS</code> to the <code>p.width</code> / <code>p.radialSegments</code> reads in <code>buildGeometry.ts</code> — the params bag is <code>Record&lt;string, number&gt;</code>, so a rename on one side yields <code>undefined</code> on the other, then NaN vertices and an object that silently fails to draw. <code>scripts/verify-params.mjs</code> reads both source files, compares the names it finds in each, and then builds every primitive at its defaults, minimums and maximums checking for NaN. Run it with <code>node scripts/verify-params.mjs</code>.</p>
+  </div>
+</section>
+
+<section id="outliner">
+  <h2><span class="num">09</span>Outliner polish</h2>
+  <p class="section-sub">A bug found in testing, plus the two deferred items it made sense to pick up alongside the fix.</p>
+
+  <h3>Bug: duplicating a group lost its contents</h3>
+  <p><code>duplicateObject</code> copied exactly one object. For a box that is correct; for a group it produced an empty shell, because the children still referenced the <em>original</em> group's id and so stayed where they were.</p>
+
+  <p>The fix collects the whole subtree, mints a fresh id for every object in it, and remaps internal <code>parentId</code> links onto the new ids so the copy is self-contained. The root copy keeps the source's own parent, so a duplicated group lands beside the one it came from rather than jumping to the top level.</p>
+
+  <div class="callout why">
+    <span class="k">Why this was easy to miss</span>
+    <p>The flat-list-plus-parentId model makes most operations naturally recursive — delete already cascaded, and rendering nests for free. Duplicate was the one place that had to walk the tree <em>explicitly</em>, and it was written before hierarchy existed at all. Worth asking the same question of anything else predating 2c.</p>
+  </div>
+
+  <h3>Reordering</h3>
+  <p>An object's index in the flat array decides its order among its siblings. Absolute position is irrelevant — only relative order within a parent matters, since both the renderer and the outliner group by <code>parentId</code>.</p>
+
+  <p><code>setParent</code> is now a thin wrapper over <code>moveObject(id, parentId, beforeId)</code>, which reparents and repositions in one step. Only the object itself moves in the array; its descendants stay put, which is harmless because their order relative to each other is unchanged.</p>
+
+  <p>Drop targets follow the usual file-tree convention: the middle 40% of a row nests into it, the top and bottom 30% insert before or after it. The intent is recomputed from the pointer's position within the row on every <code>dragover</code>, so the insertion line previews exactly what will happen.</p>
+
+  <h3>Collapsible groups</h3>
+  <p>A disclosure triangle on any row with children, with the collapsed set living in <code>editorStore</code> — presentation state, never saved and never undone. A collapsed group shows its child count. Starting a drag auto-collapses the dragged group, since dropping something into a child you cannot see would be confusing.</p>
+
+  <h3>Testing the real source</h3>
+  <p>The earlier harnesses mirror their logic, which tests the copy rather than the code. Node 22 can strip TypeScript types directly, so <code>verify-hierarchy.mjs</code> imports <code>src/scene/hierarchy.ts</code> itself — no copy, no drift. That is why the list operations were pulled out of the store into their own module: a pure function is testable, a store action is not.</p>
+
+  <p>19 cases, including a regression test for the duplicate bug by name. <code>npm run verify</code> runs all three harnesses.</p>
+</section>
+
+<section id="remaining">
+  <h2><span class="num">10</span>Deferred</h2>
+  <p class="section-sub">Things phase 02 touched but deliberately did not finish.</p>
+
+  <h3>From grouping</h3>
+  <ul>
+    <li><strong>Multi-select</strong> — shift-click in the viewport and outliner, so "group these three" works in one action instead of four drags</li>
+    <li><strong>Group bounds</strong> — a selected group currently marks its origin with an axes helper rather than outlining what it contains</li>
+  </ul>
+
+  <h3>From parameters</h3>
+  <ul>
+    <li><strong>Drag-to-scrub</strong> — dragging sideways on a number field to nudge it, which is faster than typing for shape work</li>
+    <li><strong>Non-uniform scale vs. dimensions</strong> — a box can be widened by its <code>width</code> param or by its X scale, and the two look identical in the viewport but behave differently under reparenting. Worth collapsing into one concept eventually</li>
+  </ul>
+</section>
+
+<footer>
+  Phase 02 complete · next up phase 03, textures. <a href="roadmap.html">Back to roadmap</a>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

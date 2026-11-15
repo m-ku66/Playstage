@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Playstage — Roadmap</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="doc.css" />
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <p class="eyebrow">Project Roadmap</p>
+    <h1>Playstage</h1>
+    <p class="lede">A lightweight 3D previsualization tool for comic and manga backgrounds. Block out a scene with shapes, project textures onto them, bookmark camera angles, export the frame.</p>
+    <div class="meta">
+      <span class="chip">Tauri 2</span>
+      <span class="chip">React 19 + TypeScript</span>
+      <span class="chip">React Three Fiber</span>
+      <span class="chip">Zustand</span>
+      <span class="chip">Tailwind v4</span>
+      <span class="chip">three-bvh-csg</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<nav class="toc">
+  <div class="toc-label">Contents</div>
+  <a href="#why"><span class="num">01</span>Why this exists</a>
+  <a href="#stack"><span class="num">02</span>Stack decisions</a>
+  <a href="#geometry"><span class="num">03</span>Geometry strategy</a>
+  <a href="#model"><span class="num">04</span>Data model</a>
+  <a href="#phases"><span class="num">05</span>Build phases</a>
+  <a href="#perf"><span class="num">06</span>Performance rules</a>
+  <a href="#layout"><span class="num">07</span>Project layout</a>
+</nav>
+
+<main>
+
+<section id="why">
+  <h2><span class="num">01</span>Why this exists</h2>
+  <p class="section-sub">The problem Playstage solves, and the shape of the solution.</p>
+
+  <p>Drawing backgrounds by hand for every panel is slow, and perspective consistency across a page is harder still. The standard fix is to block the environment out in 3D, then draw over a render. Blender can do this, but its workflow is built for finished assets: create a mesh, unwrap UVs, assign materials, manage a render pipeline. That is a lot of ceremony for "I need a street corner from three angles."</p>
+
+  <p>Playstage trades generality for speed. A small set of shapes, direct per-face texturing with no UV unwrapping, camera bookmarks you can flip between, and a one-click frame export.</p>
+
+  <div class="callout why">
+    <span class="k">Design principle</span>
+    <p>Every feature should shorten the path from "I need this background" to "I'm drawing over it." If a feature adds a step without removing two, it does not belong here.</p>
+  </div>
+</section>
+
+<section id="stack">
+  <h2><span class="num">02</span>Stack decisions</h2>
+  <p class="section-sub">What was picked, and what it was picked over.</p>
+
+  <table>
+    <thead><tr><th>Decision</th><th>Chosen</th><th>Reasoning</th></tr></thead>
+    <tbody>
+      <tr><td>Shell</td><td><b>Tauri 2</b> over Electron</td><td>Much smaller memory footprint — the OS webview instead of a bundled Chromium. Matters because the 3D viewport wants that headroom. Also the Rust on-ramp.</td></tr>
+      <tr><td>Renderer</td><td><b>R3F + Three.js</b></td><td>Existing fluency. Declarative scene graph maps cleanly onto an editor's object list.</td></tr>
+      <tr><td>State</td><td><b>Zustand</b></td><td>Flat stores, selector subscriptions, no provider tree. Easy to serialize straight to the scene file.</td></tr>
+      <tr><td>Geometry</td><td><b>Primitives + CSG + profiles</b></td><td>See section 03.</td></tr>
+      <tr><td>Styling</td><td><b>Tailwind v4</b></td><td>Theme tokens live in <code>@theme</code>, so the palette is one file.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Where Rust actually shows up</h3>
+  <p>Very little of this app is Rust, by design. The Rust side is plumbing the browser cannot do on its own:</p>
+  <ul>
+    <li>Reading and writing the scene file to disk</li>
+    <li>Importing texture files from the filesystem</li>
+    <li>Writing exported PNGs out</li>
+    <li>Native file dialogs and window configuration</li>
+  </ul>
+  <p>Everything else — the scene graph, the editing, the rendering — is TypeScript. Expect to write <code>#[tauri::command]</code> functions and little else.</p>
+</section>
+
+<section id="geometry">
+  <h2><span class="num">03</span>Geometry strategy</h2>
+  <p class="section-sub">The decision that constrains everything downstream.</p>
+
+  <p>Primitives plus grouping gets you a surprising distance, but it hits a ceiling fast. A bridge built from a box and a cylinder can only ever have a round arch. A pointed or boxed arch needs something more.</p>
+
+  <h3>Three layers, in order of escalation</h3>
+
+  <table>
+    <thead><tr><th>Layer</th><th>Handles</th><th>Cost</th></tr></thead>
+    <tbody>
+      <tr><td>Primitives<br>+ groups</td><td>The bulk of a scene. Walls, posts, crates, slabs, steps. Compound objects via parented groups.</td><td>Free — built into Three.js, material groups per face included.</td></tr>
+      <tr><td>CSG<br>booleans</td><td>Cut-outs: doorways, windows, notches, boxed arches. Subtract a box from a box, intersect two cylinders.</td><td>One library (<code>three-bvh-csg</code>), geometry must be regenerated on edit.</td></tr>
+      <tr><td>Profile<br>extrude / lathe</td><td>Custom cross-sections. Edit a 2D outline, push it through space or spin it. Arches of any curve, ramps, mouldings, railings.</td><td>A small 2D profile editor UI. Much cheaper than a 3D mesh editor.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout note">
+    <span class="k">Ruled out</span>
+    <p><b>Metaballs</b> — implicit surfaces blend smoothly by nature, which is structurally wrong for architecture where hard edges are the point. <b>Full vertex/edge mesh editing</b> — needs a half-edge data structure, selection modes, extrude/bevel/inset algorithms, and vertex-level undo. That is rebuilding Blender's mesh mode, which is the thing this tool exists to avoid.</p>
+  </div>
+
+  <div class="callout why">
+    <span class="k">Why this matters now</span>
+    <p>Each layer changes how geometry is produced. Primitives are static and have free per-face material groups; CSG and extrude geometry is <em>generated</em> and must be rebuilt on edit, with material groups tracked by hand. Building the data model around all three from day one means later phases fill in branches rather than refactoring the format.</p>
+  </div>
+</section>
+
+<section id="model">
+  <h2><span class="num">04</span>Data model</h2>
+  <p class="section-sub">Defined in <code>src/types/scene.ts</code>. This is also the on-disk format.</p>
+
+  <p>The key move is <code>GeometrySpec</code> — a discriminated union covering every geometry source the app will ever have. Only <code>primitive</code> and <code>group</code> are implemented; the rest exist in the type so the store, the file format, and the renderer are already shaped around them.</p>
+
+<pre><code><span class="c">// every way an object can get its shape</span>
+<span class="kw">type</span> GeometrySpec =
+  | { kind: <span class="kw">"primitive"</span>; primitive: PrimitiveKind; params }
+  | { kind: <span class="kw">"extrude"</span>;   profile: Vec2[]; depth; bevel…; holes }
+  | { kind: <span class="kw">"lathe"</span>;     profile: Vec2[]; segments; phiLength }
+  | { kind: <span class="kw">"csg"</span>;       op: BooleanOp; aId; bId }
+  | { kind: <span class="kw">"group"</span> };
+
+<span class="kw">interface</span> SceneObject {
+  id; name;
+  parentId;                 <span class="c">// null = root level</span>
+  transform;                <span class="c">// position / rotation / scale</span>
+  geometry: GeometrySpec;
+  materials: Record&lt;number, FaceMaterial&gt;;   <span class="c">// keyed by group index</span>
+  visible; locked;
+}
+
+<span class="kw">interface</span> FaceMaterial {
+  textureId; color;
+  tiling; offset; rotation; <span class="c">// UV transform, per face</span>
+  doubleSided;
+}
+
+<span class="kw">interface</span> CameraHotspot { id; name; position; target; fov }</code></pre>
+
+  <h3>Why materials are keyed by group index</h3>
+  <p>A Three.js <code>BoxGeometry</code> ships with six material groups, one per face. <code>CylinderGeometry</code> has three (side, top cap, bottom cap). Per-face texturing is therefore native — assign a different material to each slot and you are done, no UV unwrapping. <code>PRIMITIVE_GROUP_COUNT</code> records how many slots each primitive exposes.</p>
+
+  <h3>Two stores, one document</h3>
+  <p><code>sceneStore</code> holds the document — objects, hotspots, textures. <code>editorStore</code> holds how you are looking at it — selection, gizmo mode, snap settings. The split matters because undo/redo will snapshot the document only. Pressing Ctrl+Z should never flip your gizmo back to rotate mode or re-select something.</p>
+
+  <h3>Scene file</h3>
+  <p>A JSON document: <code>{ format, version, name, objects, hotspots, textures }</code>. Versioned from the start so old scenes can be migrated rather than broken.</p>
+</section>
+
+<section id="phases">
+  <h2><span class="num">05</span>Build phases</h2>
+  <p class="section-sub">Each phase is independently usable. Nothing is half-wired across a boundary.</p>
+
+  <div class="phases">
+
+    <div class="phase">
+      <div class="phase-head">
+        <span class="phase-n">01</span>
+        <span class="phase-title">Skeleton</span>
+        <span class="tag done">Complete</span>
+      </div>
+      <ul>
+        <li><strong>Tauri 2 + Vite + React 19 + TS</strong> scaffold, window configured</li>
+        <li><strong>R3F viewport</strong> with infinite grid, orbit controls, soft key light</li>
+        <li><strong>Zustand store</strong> built on the full scene schema</li>
+        <li><strong>Three-pane shell</strong> — outliner, viewport, properties</li>
+        <li><strong>Add / select / rename / hide / duplicate / delete</strong> for all five primitives</li>
+        <li><strong>Numeric transform editing</strong> in the properties panel</li>
+      </ul>
+      <div class="ships"><b>Ships</b>The app opens, you can block out a rough scene with numbers.</div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-head">
+        <span class="phase-n">02</span>
+        <span class="phase-title">Direct manipulation</span>
+        <span class="tag done">Complete</span>
+      </div>
+      <ul>
+        <li><strong>Transform gizmos</strong> — translate, rotate, scale handles in the viewport</li>
+        <li><strong>Grid and angle snapping</strong>, toggleable, with editable step sizes</li>
+        <li><strong>Keyboard shortcuts</strong> — W/E/R modes, X snap, H hide, Del, Ctrl+D, Esc</li>
+        <li><strong>Undo / redo</strong> — snapshot history, with drags and typing as single entries</li>
+        <li><strong>Grouping</strong> — nested scene graph, outliner tree, world-preserving reparent</li>
+        <li><strong>Outliner polish</strong> — deep duplicate, sibling reordering, collapsible groups</li>
+        <li><strong>Primitive parameter editing</strong> — spec-driven fields, clamped, with a draft-state number input</li>
+      </ul>
+      <div class="ships"><b>Ships</b>Blocking out a scene stops feeling like data entry.</div>
+      <div class="links">→ <a href="phase-02.html">Phase 02 milestone doc</a></div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-head">
+        <span class="phase-n">03</span>
+        <span class="phase-title">Textures</span>
+        <span class="tag next">Next</span>
+      </div>
+      <ul>
+        <li><strong>Texture import</strong> and an asset tray</li>
+        <li><strong>Per-face assignment</strong> — click a face, assign a texture</li>
+        <li><strong>UV controls</strong> — tiling, offset, rotation, flip, per face</li>
+        <li><strong>Material presets</strong> you can reuse across a scene</li>
+        <li><strong>Flat colour and wireframe modes</strong> for clean draw-over references</li>
+      </ul>
+      <div class="ships"><b>Ships</b>Scenes stop being grey boxes.</div>
+      <div class="links">Note: native file-drop is off (see phase 02), so texture import needs a file dialog rather than a drop target.</div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-head">
+        <span class="phase-n">04</span>
+        <span class="phase-title">Advanced geometry</span>
+        <span class="tag later">Planned</span>
+      </div>
+      <ul>
+        <li><strong>CSG booleans</strong> — union, subtract, intersect via <code>three-bvh-csg</code></li>
+        <li><strong>Non-destructive boolean stack</strong> — operands stay editable</li>
+        <li><strong>2D profile editor</strong> — draw and edit a cross-section outline</li>
+        <li><strong>Extrude and lathe</strong> from a profile, with bevel controls</li>
+        <li><strong>Material group tracking</strong> for generated geometry</li>
+      </ul>
+      <div class="ships"><b>Ships</b>Arches, ramps, cutouts — the shapes primitives cannot reach.</div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-head">
+        <span class="phase-n">05</span>
+        <span class="phase-title">Camera hotspots</span>
+        <span class="tag later">Planned</span>
+      </div>
+      <ul>
+        <li><strong>Save current view</strong> as a named hotspot</li>
+        <li><strong>Instant snap</strong> between saved angles</li>
+        <li><strong>Hotspot panel</strong> with rename, reorder, update-in-place</li>
+        <li><strong>FOV and framing controls</strong>, panel aspect-ratio guides</li>
+      </ul>
+      <div class="ships"><b>Ships</b>One scene serves every panel on the page.</div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-head">
+        <span class="phase-n">06</span>
+        <span class="phase-title">Persistence and export</span>
+        <span class="tag later">Planned</span>
+      </div>
+      <ul>
+        <li><strong>Rust commands</strong> for scene save and load, native file dialogs</li>
+        <li><strong>Recent files</strong>, unsaved-changes guard</li>
+        <li><strong>PNG export</strong> at arbitrary resolution, not just viewport size</li>
+        <li><strong>Batch export</strong> — render every hotspot in one pass</li>
+        <li><strong>Texture packing</strong> so a scene file is portable</li>
+      </ul>
+      <div class="ships"><b>Ships</b>The tool becomes part of an actual page workflow.</div>
+    </div>
+
+  </div>
+
+  <div class="callout note">
+    <span class="k">Beyond v1</span>
+    <p>Candidates, not commitments: line-art render mode with outline shading, figure-reference mannequins for scale, scene templates, lighting presets for mood, and a clipboard-direct export into Clip Studio.</p>
+  </div>
+</section>
+
+<section id="perf">
+  <h2><span class="num">06</span>Performance rules</h2>
+  <p class="section-sub">Stability was a hard requirement, so these are rules rather than suggestions.</p>
+
+  <h3>1. On-demand rendering</h3>
+  <p>The canvas runs <code>frameloop="demand"</code>. It renders when something changes — a store update, an orbit drag — not sixty times a second into a static scene. For an editor that sits idle while you think, this is the difference between a quiet machine and a hot one.</p>
+
+  <div class="callout watch">
+    <span class="k">Watch for</span>
+    <p>Anything that animates <em>outside</em> React's render cycle has to request frames itself by calling <code>invalidate()</code>. The transform gizmo is the first case of this; camera hotspot transitions would be another if they ever get animated.</p>
+  </div>
+
+  <h3>2. Dispose everything</h3>
+  <p>Every geometry and material is disposed in a cleanup effect when it is replaced or unmounted. Without this, editing a primitive's parameters repeatedly leaks GPU memory until the app dies. This is <em>the</em> classic Three.js editor crash.</p>
+
+  <div class="callout watch">
+    <span class="k">Watch for</span>
+    <p>Any new code path that constructs a <code>BufferGeometry</code>, <code>Material</code>, or <code>Texture</code> needs a matching <code>.dispose()</code>. CSG and extrude in phase 04 regenerate geometry on every parameter change, so this gets more important, not less.</p>
+  </div>
+
+  <h3>3. Memoise on the right dependencies</h3>
+  <p>Geometry is memoised on the geometry spec alone, not the whole object. Moving an object updates a matrix; it must never rebuild a mesh.</p>
+
+  <h3>4. Keep the stores flat</h3>
+  <p>Objects live in a flat array with <code>parentId</code> references rather than nested children. Serialization stays trivial, and a deep edit does not invalidate an entire subtree of React components.</p>
+
+  <h3>5. Debounce generated geometry</h3>
+  <p>From phase 04 onward, dragging a slider that drives a boolean or an extrude should debounce the rebuild. Scrubbing a value at sixty rebuilds per second will stall the main thread.</p>
+</section>
+
+<section id="layout">
+  <h2><span class="num">07</span>Project layout</h2>
+  <p class="section-sub">Where things live as of the end of phase 02.</p>
+
+<pre class="tree"><b>playstage/</b>
+├─ <b>docs/</b>
+│  ├─ doc.css                 <span class="c">shared doc styling</span>
+│  ├─ roadmap.html            <span class="c">this document</span>
+│  └─ phase-02.html           <span class="c">current milestone</span>
+├─ <b>src/</b>
+│  ├─ <b>types/</b>
+│  │  └─ scene.ts             <span class="c">data model + on-disk format</span>
+│  ├─ <b>geometry/</b>
+│  │  ├─ buildGeometry.ts     <span class="c">GeometrySpec → BufferGeometry</span>
+│  │  └─ transforms.ts        <span class="c">world/local matrix maths</span>
+│  ├─ <b>scene/</b>
+│  │  └─ hierarchy.ts         <span class="c">pure list ops — subtree, reorder</span>
+│  ├─ <b>store/</b>
+│  │  ├─ sceneStore.ts        <span class="c">the document</span>
+│  │  ├─ editorStore.ts       <span class="c">selection, gizmo mode, snapping</span>
+│  │  ├─ historyStore.ts      <span class="c">undo/redo stacks</span>
+│  │  ├─ devFreeze.ts         <span class="c">dev-only mutation guard</span>
+│  │  └─ nodeStore.ts         <span class="c">live Three nodes by object id</span>
+│  ├─ <b>hooks/</b>
+│  │  └─ useKeyboardShortcuts.ts
+│  ├─ <b>components/</b>
+│  │  ├─ Viewport.tsx         <span class="c">R3F canvas, grid, lights, controls</span>
+│  │  ├─ SceneObjectView.tsx  <span class="c">recursive render; owns dispose</span>
+│  │  ├─ SelectionGizmo.tsx   <span class="c">gizmo, mounted at scene root</span>
+│  │  ├─ Toolbar.tsx
+│  │  ├─ Outliner.tsx
+│  │  ├─ NumberField.tsx      <span class="c">draft-state numeric input</span>
+│  │  └─ Inspector.tsx
+│  ├─ App.tsx
+│  ├─ main.tsx
+│  └─ styles.css              <span class="c">Tailwind theme tokens</span>
+├─ <b>scripts/</b>
+│  ├─ verify-transforms.mjs   <span class="c">reparent maths test harness</span>
+│  ├─ verify-params.mjs       <span class="c">spec/builder consistency check</span>
+│  └─ verify-hierarchy.mjs    <span class="c">imports the real source</span>
+└─ <b>src-tauri/</b>            <span class="c">Rust shell — untouched so far</span></pre>
+
+  <h3>Running it</h3>
+<pre><code>npm run tauri dev     <span class="c"># dev build, hot reload</span>
+npm run tauri build   <span class="c"># production binary</span>
+npm run typecheck     <span class="c"># tsc --noEmit</span>
+npm run verify        <span class="c"># all three test harnesses</span></code></pre>
+</section>
+
+<footer>
+  Playstage roadmap · phases 01 and 02 complete — see the <a href="phase-02.html">phase 02 milestone doc</a> · next up phase 03, textures.
+</footer>
+
+</main>
+</div>
+</body>
+</html>
