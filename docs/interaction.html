@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Playstage — Interaction and measurement</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="doc.css" />
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <p class="eyebrow"><a href="roadmap.html">Roadmap</a> / Interaction milestone</p>
+    <h1>Interaction and measurement</h1>
+    <p class="lede">An unplanned milestone, driven entirely by using the thing. Multi-select, locking, grouping from a selection, real-world units, and a toolbar with fewer buttons on it.</p>
+    <div class="meta">
+      <span class="chip live">Complete</span>
+      <span class="chip">Multi-select</span>
+      <span class="chip">1 unit = 1 metre</span>
+      <span class="chip">Two rulers</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<nav class="toc">
+  <div class="toc-label">Contents</div>
+  <a href="#origin"><span class="num">01</span>Where this came from</a>
+  <a href="#picking"><span class="num">02</span>What a click means</a>
+  <a href="#grouping"><span class="num">03</span>Grouping beat multi-transform</a>
+  <a href="#units"><span class="num">04</span>Units and rulers</a>
+  <a href="#ui"><span class="num">05</span>Fewer buttons</a>
+  <a href="#lesson"><span class="num">06</span>One regression, and what it taught</a>
+</nav>
+
+<main>
+
+<section id="origin">
+  <h2><span class="num">01</span>Where this came from</h2>
+  <p class="section-sub">None of this was on the roadmap. All of it came out of driving the tool.</p>
+
+  <p>Once scenes could be saved, the editor got used properly for the first time — and the gaps showed up immediately. Not missing features so much as missing manners: no way to act on several objects at once, no way to stop a finished assembly being nudged, and a click on a grouped wall selecting the wall rather than the building.</p>
+
+  <div class="callout note">
+    <span class="k">Pattern worth keeping</span>
+    <p>Every item in this milestone came from hands-on use, and none of it would have been caught by a typecheck or a test. The same loop found the two phase 02 bugs. Build a slice, use it, fix what annoys you.</p>
+  </div>
+</section>
+
+<section id="picking">
+  <h2><span class="num">02</span>What a click means</h2>
+  <p class="section-sub">Three changes to selection, each small, together a different feel.</p>
+
+  <h3>Multi-select</h3>
+  <p><code>editorStore</code> holds <code>selectedIds</code> as an ordered array rather than a single id. Order carries meaning: the <strong>last</strong> entry is the active object — the one the inspector describes and the gizmo attaches to — which matches how shift-clicking behaves everywhere else. Shift or Ctrl works in the viewport and the outliner, and delete, duplicate, hide and lock all act on the whole selection as one undo entry.</p>
+
+  <div class="callout note">
+    <span class="k">Not done</span>
+    <p>With two or more selected, <strong>no gizmo appears</strong>. Driving a multiple selection needs a proxy object at the selection centroid whose delta matrix is re-applied to each object's world transform. A half-built version where move works and rotate quietly does the wrong thing would be worse than an honest absence, so the inspector says so on screen. Grouping covers most of the need — see section 03.</p>
+  </div>
+
+  <h3>Locking</h3>
+  <p><code>locked</code> already existed on <code>SceneObject</code> and was already respected by the renderer and the gizmo; it had no way to be set. Now it does, in the outliner and the inspector. Two deliberate narrowings:</p>
+
+  <ul>
+    <li><strong>It does not cascade.</strong> Locking a group pins the assembly against stray viewport clicks, but you can still open it in the outliner and adjust one piece on purpose.</li>
+    <li><strong>It does not deselect.</strong> The first pass did, and it was a trap: lock three things, the selection clears, and now it takes three clicks to undo. Locking blocks <em>acquiring</em> a selection, not holding one.</li>
+  </ul>
+
+  <div class="callout watch">
+    <span class="k">The detail that mattered</span>
+    <p>Locked meshes are removed from the raycast rather than guarded inside the click handler. <strong>A handler that merely returns still counts as a hit</strong> — which suppresses <code>onPointerMissed</code> and swallows the click entirely. Dropping the mesh from the raycast instead lets clicks pass through to whatever is behind, and lets a click on empty space still clear the selection.</p>
+  </div>
+
+  <h3>Grouped objects resolve to their group</h3>
+  <p>A viewport click resolves through <code>outermostAncestorId</code> to the top of the subtree, so clicking a wall selects the building. Members stay reachable through the outliner, where picking one is deliberate rather than accidental.</p>
+
+  <p>One addition that was not asked for but without which the feature felt broken: <strong>selecting a group outlines its members</strong> in a softer blue. Otherwise clicking a building gave you nothing but a small axes marker at the group origin, and no sense of what you had grabbed.</p>
+</section>
+
+<section id="grouping">
+  <h2><span class="num">03</span>Grouping beat multi-transform</h2>
+  <p class="section-sub">The interesting decision in this milestone was what <em>not</em> to build.</p>
+
+  <p>The obvious answer to "I want to move three things at once" is a multi-object gizmo. The cheaper answer was to make grouping good enough that you rarely want one.</p>
+
+  <table>
+    <thead><tr><th>Need</th><th>Groups before</th><th>Groups now</th></tr></thead>
+    <tbody>
+      <tr><td>Move together</td><td>Worked — identical result</td><td>Unchanged</td></tr>
+      <tr><td>Rotate / scale</td><td><b>Wrong.</b> Group origin sat at the world origin, so rotating swung the objects through an arc</td><td>Origin lands at the selection centroid, so it spins in place</td></tr>
+      <tr><td>Make a group</td><td>Four steps — add an empty group, drag each object onto it</td><td><code>Ctrl+G</code></td></tr>
+      <tr><td>Undo a group</td><td><b>Impossible.</b> No ungroup, and deleting the group took its contents with it</td><td><code>Ctrl+⇧G</code></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout why">
+    <span class="k">The pivot is the whole trick</span>
+    <p>Putting the new group's origin at the centroid of what was grouped is the one change that closes the gap with a multi-object gizmo. Everything else about grouping was already equivalent; the pivot was why it felt wrong.</p>
+  </div>
+
+  <p>Both operations are a single undo entry, built on the drag-batching from phase 02. Ungroup anchors the freed children at the group's old slot so their order survives, then removes the empty shell.</p>
+
+  <div class="callout note">
+    <span class="k">What groups still cannot do</span>
+    <p>Transform objects that live in <em>different</em> parents — a lamp inside building A and a lamp inside building B. Grouping them would pull both out of their buildings. If that turns up in real use, that is when multi-transform earns its place.</p>
+  </div>
+</section>
+
+<section id="units">
+  <h2><span class="num">04</span>Units and rulers</h2>
+  <p class="section-sub">One world unit is one metre. That is now written down in one place.</p>
+
+  <p>The default grid follows from it: a 1 m cell with 5 m sections. A door is about two units tall, a room about three. Metric shows metres and centimetres; imperial converts to feet and inches. Nothing in the stored scene changes with the setting, so switching can never alter geometry.</p>
+
+  <p>The inspector shows the selected object's size in <strong>world</strong> scale, not local — a box inside a group scaled to 0.5 reports the half-metre it actually occupies, which is the number you need when building to size.</p>
+
+  <h3>Two rulers, because one of them has to lie</h3>
+
+  <div class="callout why">
+    <span class="k">The perspective problem</span>
+    <p>A ruler pinned to the screen edge has exactly one true scale — at whatever depth the camera is focused on. Objects nearer or further measure wrong against it. Rather than ship that silently, there are two rulers with separate toggles and different honesty.</p>
+  </div>
+
+  <table>
+    <thead><tr><th>Ruler</th><th>How it works</th><th>Accuracy</th></tr></thead>
+    <tbody>
+      <tr><td>Ground</td><td>Tick marks drawn in 3D on the X/Z axes; numbers sit at the projected screen position of a real world coordinate</td><td>Correct from any camera angle</td></tr>
+      <tr><td>Edges</td><td>Strips along the bottom and left, measured outward from screen centre</td><td>Exact at the focus depth — and exact <em>everywhere</em> once the view is orthographic, which the caption says</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Why the numbers are DOM</h3>
+  <p>Three reasons, all of them practical. Drei's <code>Text</code> pulls a font from a CDN by default, which fails offline inside Tauri. DOM numbers stay upright and legible at a shallow camera angle instead of foreshortening into nothing. And they are <code>pointer-events-none</code>, so a ruler can never eat a click meant for an object.</p>
+
+  <p>The values they need only exist inside the Canvas, so <code>ViewportProbe</code> measures them on each rendered frame and publishes them to <code>viewStore</code>, with a tolerance check so sub-pixel jitter does not re-render the overlay.</p>
+
+  <h3>Tick steps are chosen in display units</h3>
+  <p>Not world units. A tick every world unit would label an imperial ruler 3'&nbsp;3", 6'&nbsp;7", 9'&nbsp;10". Stepping by whole feet and converting back gives round numbers on both rulers. The edge strips also widen their step as you zoom out, so the ticks never crowd into a grey smear.</p>
+</section>
+
+<section id="ui">
+  <h2><span class="num">05</span>Fewer buttons</h2>
+  <p class="section-sub">The toolbar had grown a button per feature. That does not scale to phase 04.</p>
+
+  <ul>
+    <li><strong>Seven buttons became one.</strong> Five primitives plus Group and Ungroup are now an <code>Add ▾</code> menu, with the group entries greyed out when they do not apply and their shortcuts shown beside them.</li>
+    <li><strong>The keyboard legend became a modal</strong> behind one row at the bottom of the left panel, opened with <code>?</code>. It was taking a permanent slice of the only panel that benefits from vertical space, to show something you read once a week. It also got filled out properly — six sections now.</li>
+    <li><strong>Camera and measurement controls</strong> went to the right-hand end: view cluster, orthographic toggle, unit switch, two ruler toggles.</li>
+  </ul>
+
+  <div class="callout note">
+    <span class="k">Small thing, worth the trouble</span>
+    <p>While the Add menu is open, Escape closes it rather than clearing the selection — registered in the capture phase so it runs before the global shortcut handler. And while the shortcuts modal is up, editing keys are swallowed: a stray <code>H</code> or <code>Delete</code> landing behind a modal on an object you cannot see is a genuinely unpleasant surprise.</p>
+  </div>
+</section>
+
+<section id="lesson">
+  <h2><span class="num">06</span>One regression, and what it taught</h2>
+  <p class="section-sub">A test harness caught a real break, and was itself the thing at fault.</p>
+
+  <p>Adding a <code>geometrySize</code> helper to <code>buildGeometry.ts</code> turned three passing tests red. <code>verify-params.mjs</code> checks the builder by scanning its source for every <code>p.&lt;param&gt;</code> it reads, chunked by <code>case "..."</code> matches — and a second switch over the same primitive names in that file silently became the thing under test.</p>
+
+  <p>Fixed twice over. Measurement moved to its own <code>geometry/measure.ts</code>, which it should have been anyway: measuring is not building. And the harness scan is now bounded to the end of <code>buildPrimitive</code> instead of running to end-of-file, so it cannot happen again.</p>
+
+  <div class="callout why">
+    <span class="k">The useful part</span>
+    <p>A harness that reads source text is fragile in a way one that imports real functions is not. The three harnesses that import the actual modules cannot drift; this one could, and did. Worth migrating the remaining source-scanning checks when next in those files.</p>
+  </div>
+
+  <h3>Harnesses as they stand</h3>
+  <table>
+    <thead><tr><th>Harness</th><th>Covers</th></tr></thead>
+    <tbody>
+      <tr><td>verify-hierarchy</td><td>Subtree, duplicate, reorder, unique names</td></tr>
+      <tr><td>verify-selection</td><td>Pick resolution, selection roots, toggling</td></tr>
+      <tr><td>verify-grouping</td><td>Centroid and world/local pivot maths</td></tr>
+      <tr><td>verify-views</td><td>Axis directions, flip, pole nudge</td></tr>
+      <tr><td>verify-hotspots</td><td>Lens clamping, pose copying</td></tr>
+      <tr><td>verify-units</td><td>Formatting, tick steps, zoom adaptation</td></tr>
+      <tr><td>verify-scenefile</td><td>34 cases of hostile scene-file input</td></tr>
+      <tr><td>verify-transforms</td><td>Reparent maths <span class="c">(mirrors logic)</span></td></tr>
+      <tr><td>verify-params</td><td>Spec/builder consistency <span class="c">(scans source)</span></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout note">
+    <span class="k">Running them</span>
+    <p>Node strips TypeScript directly, so the harnesses import real source. Extensionless specifiers need a small resolution hook — <code>scripts/register-ts.mjs</code> — because Node's ESM resolver wants a real file extension where Vite and tsc do not.</p>
+  </div>
+</section>
+
+<footer>
+  Interaction milestone · complete · back to the <a href="roadmap.html">roadmap</a>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

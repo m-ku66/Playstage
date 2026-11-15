@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Playstage — Phase 06: Persistence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="doc.css" />
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <p class="eyebrow"><a href="roadmap.html">Roadmap</a> / Phase 06</p>
+    <h1>Persistence</h1>
+    <p class="lede">Scenes survive closing the app. A versioned JSON format, two Rust commands, an atomic write, and a loader that repairs a damaged file rather than refusing it.</p>
+    <div class="meta">
+      <span class="chip live">Save / load complete</span>
+      <span class="chip open">Export outstanding</span>
+      <span class="chip">tauri-plugin-dialog</span>
+      <span class="chip">34 loader tests</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<nav class="toc">
+  <div class="toc-label">Contents</div>
+  <a href="#queue"><span class="num">01</span>Why this jumped the queue</a>
+  <a href="#rust"><span class="num">02</span>The Rust side</a>
+  <a href="#format"><span class="num">03</span>The file format</a>
+  <a href="#loader"><span class="num">04</span>Repair, don't refuse</a>
+  <a href="#actions"><span class="num">05</span>New / Open / Save</a>
+  <a href="#open"><span class="num">06</span>Still outstanding</a>
+</nav>
+
+<main>
+
+<section id="queue">
+  <h2><span class="num">01</span>Why this jumped the queue</h2>
+  <p class="section-sub">Phase 06 was built before phase 03, out of roadmap order.</p>
+
+  <p>At the end of phase 02 the editor could build a scene, manipulate it directly and undo its way out of mistakes — and lose all of it the moment the window closed. Textures were next on the roadmap, but building them first would have meant two things: a tool that still could not be used on a real page, and every texture test starting from an empty scene.</p>
+
+  <div class="callout why">
+    <span class="k">The argument</span>
+    <p>Grey boxes are already useful. What a background blockout has to give you is <em>correct perspective to draw over</em>, not a textured render. So save plus load made the tool earn its keep in the state it was already in, and made the next phase cheaper to build at the same time.</p>
+  </div>
+</section>
+
+<section id="rust">
+  <h2><span class="num">02</span>The Rust side</h2>
+  <p class="section-sub">Two commands in <code>src-tauri/src/lib.rs</code>, and a plugin for the pickers.</p>
+
+  <p>File dialogs come from <code>tauri-plugin-dialog</code>. The reading and writing does not use <code>tauri-plugin-fs</code> — it is two hand-written commands instead.</p>
+
+  <div class="callout why">
+    <span class="k">Why not the fs plugin</span>
+    <p>That plugin gates access with a path scope declared at build time, which fights a file picker whose paths only exist at runtime. Two narrow commands sidestep the whole problem, and neither can enumerate a directory — so there is nothing to walk outward from a path the user chose. It also puts the Rust where the Rust was wanted.</p>
+  </div>
+
+  <h3>The write is atomic</h3>
+  <p>A save goes to a temp file beside the target, is flushed to the device with <code>sync_all()</code>, and is then renamed over the target. Rename is atomic on every platform this ships to.</p>
+
+  <div class="callout watch">
+    <span class="k">Why it matters here specifically</span>
+    <p>The project lives in a OneDrive folder. Overwriting in place means a crash, a full disk or a sync hiccup midway through leaves a half-written file where a working scene used to be. With the rename, a failed save leaves the <em>previous</em> version intact — which is the exact failure this phase exists to prevent.</p>
+  </div>
+
+  <h3>A read ceiling</h3>
+  <p>A scene is plain JSON describing primitives, so even a busy one lands well under a megabyte. Reads are capped at 64 MB so that pointing Open at the wrong file fails with a message instead of trying to allocate it.</p>
+
+<pre><code><span class="c">// the whole Rust surface</span>
+<span class="kw">#[tauri::command]</span> read_text_file(path)            <span class="c">// metadata check, size cap</span>
+<span class="kw">#[tauri::command]</span> write_text_file(path, contents) <span class="c">// temp → sync → rename</span></code></pre>
+</section>
+
+<section id="format">
+  <h2><span class="num">03</span>The file format</h2>
+  <p class="section-sub"><code>.playstage</code> — the <code>SceneFile</code> shape from <code>types/scene.ts</code>, as JSON.</p>
+
+  <p>Nothing new had to be designed. <code>SceneFile</code>, <code>toSceneFile()</code> and <code>loadScene()</code> were already in place from phase 01, because the data model was built around the on-disk format from the start. This phase only had to move bytes.</p>
+
+  <p>The output is indented, not minified. These files are small, they are the user's own data, and being able to open one in a text editor or diff two of them is worth more than the bytes saved.</p>
+
+  <table>
+    <thead><tr><th>Field</th><th>Holds</th></tr></thead>
+    <tbody>
+      <tr><td>format</td><td>The literal <code>"playstage-scene"</code> — the marker a loader checks first.</td></tr>
+      <tr><td>version</td><td>Integer. A file from a newer version is refused rather than guessed at.</td></tr>
+      <tr><td>name</td><td>Display name. Reset from the filename on save-as and open.</td></tr>
+      <tr><td>objects</td><td>Flat array; hierarchy lives in <code>parentId</code>.</td></tr>
+      <tr><td>hotspots</td><td>Saved camera angles. Filled in by phase 05.</td></tr>
+      <tr><td>textures</td><td>Declared, unused until phase 03.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="loader">
+  <h2><span class="num">04</span>Repair, don't refuse</h2>
+  <p class="section-sub"><code>src/io/sceneFile.ts</code>. The largest single piece of this phase, and the least obvious.</p>
+
+  <p>Everything that comes back off disk is untrusted input, even when Playstage wrote it. A file can be hand-edited, truncated by a crash mid-write, synced badly, or produced by a newer build. And the renderer is not tolerant of malformed input — two shapes of bad data could take the whole app down.</p>
+
+  <div class="callout watch">
+    <span class="k">The two real crashes this closes</span>
+    <p><code>buildGeometry</code> <strong>throws</strong> on <code>extrude</code>, <code>lathe</code> and <code>csg</code> specs, and <code>SceneObjectView</code> calls it inside a <code>useMemo</code> with no error boundary. One such object in a file took down the entire React tree. They now load as empty groups, keeping their transform, their place in the hierarchy and all of their children.</p>
+    <p>A cycle in <code>parentId</code> made <code>SceneObjectView</code> recurse until the stack overflowed. <code>worldMatrix</code> guarded against cycles; <em>rendering never did</em>. Cycles are now cut with a three-colour depth-first walk, iteratively, so making a deep file safe cannot itself overflow.</p>
+  </div>
+
+  <h3>The posture</h3>
+  <p>Fix what can be fixed, report every fix, refuse only what is genuinely meaningless. This is a drawing tool; throwing away an afternoon's blockout because one object had a bad rotation value would be indefensible.</p>
+
+  <p>Only three things are fatal: the text is not JSON, it is not a Playstage scene, or it comes from a future format version whose meaning cannot be guessed. Everything else is repaired and the repairs are listed in a dialog on open.</p>
+
+  <ul class="check">
+    <li class="on"><span class="mark">fix</span><strong>Missing primitive params</strong> filled from the spec — <code>undefined</code> reaches Three.js as NaN vertex data</li>
+    <li class="on"><span class="mark">fix</span><strong>Out-of-range params</strong> clamped; unknown keys dropped</li>
+    <li class="on"><span class="mark">fix</span><strong>Zero scale</strong> nudged off zero, sign kept — a singular matrix makes any reparented child NaN</li>
+    <li class="on"><span class="mark">fix</span><strong>Orphans</strong> whose parent is missing moved to the top level, where they will actually draw</li>
+    <li class="on"><span class="mark">fix</span><strong>Duplicate ids</strong> reissued; children stay attached to the first occurrence</li>
+    <li class="on"><span class="mark">fix</span><strong>Material slots</strong> rebuilt from the primitive's own face count, so no holes or strays</li>
+    <li class="on"><span class="mark">fix</span><strong>Unparseable colours</strong> replaced — <code>THREE.Color</code> warns and silently keeps its old value</li>
+    <li class="on"><span class="mark">fix</span><strong>Dangling texture ids</strong> cleared back to flat colour</li>
+  </ul>
+
+  <h3>Tested as hostile input</h3>
+  <p><code>scripts/verify-scenefile.mjs</code> runs 34 cases against the real parser, mostly malformed files. Each one corresponds to a way the app used to be breakable.</p>
+</section>
+
+<section id="actions">
+  <h2><span class="num">05</span>New / Open / Save</h2>
+  <p class="section-sub"><code>src/io/documentActions.ts</code> — plain async functions, not store actions.</p>
+
+  <p>They coordinate three stores and the filesystem, which is more than any one store should know about. Keeping them outside also makes them callable from a toolbar button, a keyboard shortcut and later a window-close handler without duplicating the sequencing. Each resolves to a boolean, so a caller chaining operations — "save before closing" — can tell cancellation from failure.</p>
+
+  <table>
+    <thead><tr><th>Detail</th><th>Reasoning</th></tr></thead>
+    <tbody>
+      <tr><td>Non-reentrant</td><td>A <code>busy</code> flag makes save and open mutually exclusive. Leaning on Ctrl+S during a slow write to a synced folder would otherwise start overlapping writes to one path.</td></tr>
+      <tr><td>Picker outside the guard</td><td>The dialog blocks on the user; holding the flag through it would wedge every shortcut behind it.</td></tr>
+      <tr><td>Dirty flag cleared last</td><td>Only after the write resolves. Clearing it optimistically would show a saved scene that is not on disk.</td></tr>
+      <tr><td>Filename wins</td><td>On open, the scene is named from the file rather than the <code>name</code> inside it — that is what shows in Explorer, and the two can diverge after a rename.</td></tr>
+      <tr><td>Shortcuts beat fields</td><td>Ctrl+S fires even with a text field focused. Silently doing nothing there is how people lose work.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="open">
+  <h2><span class="num">06</span>Still outstanding</h2>
+  <p class="section-sub">This phase is not finished; the half that was blocking real use is.</p>
+
+  <ul class="check">
+    <li class="off"><span class="mark">—</span><strong>PNG export</strong> at arbitrary resolution. The canvas already runs <code>preserveDrawingBuffer</code>, so the read-back works; it needs a size control, a background choice and a binary write command.</li>
+    <li class="off"><span class="mark">—</span><strong>Batch export</strong> — every saved hotspot in one pass. Now that phase 05 exists, this turns one scene into a full set of panel references in a single click.</li>
+    <li class="off"><span class="mark">—</span><strong>Recent files</strong> list.</li>
+    <li class="off"><span class="mark">—</span><strong>Window title</strong> reflecting the scene name and dirty state.</li>
+    <li class="off"><span class="mark">—</span><strong>Close guard</strong> on the Tauri window. New and Open already ask before discarding unsaved work; closing the window does not.</li>
+    <li class="off"><span class="mark">—</span><strong>Texture packing</strong>, so a scene file is portable. Waits on phase 03.</li>
+  </ul>
+
+  <div class="callout note">
+    <span class="k">Format note</span>
+    <p>The loader accepts any version at or below the current one, so adding optional fields with sensible defaults is a cheap migration. The first candidate is storing projection mode per hotspot, which would take the format to version 2.</p>
+  </div>
+</section>
+
+<footer>
+  Phase 06 · save and load complete, export outstanding · back to the <a href="roadmap.html">roadmap</a>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

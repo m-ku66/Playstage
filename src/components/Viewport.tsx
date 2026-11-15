@@ -6,6 +6,10 @@ import { useSceneStore } from "../store/sceneStore";
 import { useEditorStore } from "../store/editorStore";
 import { SceneObjectView } from "./SceneObjectView";
 import { SelectionGizmo } from "./SelectionGizmo";
+import { CameraRig } from "./CameraRig";
+import { GroundRuler } from "./GroundRuler";
+import { ViewportProbe } from "./ViewportProbe";
+import { RulerOverlay } from "./RulerOverlay";
 
 /** Light-theme viewport palette. Kept here rather than in CSS because these
  *  values are consumed by WebGL, not by the DOM. */
@@ -22,7 +26,17 @@ function SceneTree() {
   return (
     <>
       {roots.map((o) => (
-        <SceneObjectView key={o.id} object={o} childrenOf={childrenOf} />
+        <SceneObjectView
+          key={o.id}
+          object={o}
+          childrenOf={childrenOf}
+          // A root object is its own pick target, and only its lock can make
+          // a subtree unpickable -- both values are inherited downward from
+          // here by every descendant.
+          pickRootId={o.id}
+          pickBlocked={o.locked}
+          ancestorSelected={false}
+        />
       ))}
     </>
   );
@@ -39,61 +53,77 @@ function SceneTree() {
  *
  * `preserveDrawingBuffer` is on because PNG export later reads the canvas back
  * with toDataURL, which returns a blank image without it.
+ *
+ * The ruler numbers are a sibling DOM overlay rather than part of the scene,
+ * which is why this returns a positioned wrapper instead of a bare Canvas.
  */
 export function Viewport() {
   const select = useEditorStore((s) => s.select);
   const isDragging = useEditorStore((s) => s.isDragging);
 
   return (
-    <Canvas
-      frameloop="demand"
-      shadows
-      dpr={[1, 2]}
-      camera={{ position: [6, 5, 8], fov: 50, near: 0.1, far: 2000 }}
-      gl={{ antialias: true, preserveDrawingBuffer: true }}
-      // Clicking empty space clears selection -- but not when the click was
-      // the end of a gizmo drag that happened to miss a mesh.
-      onPointerMissed={() => {
-        if (!useEditorStore.getState().isDragging) select(null);
-      }}
-      style={{ background: VIEWPORT_BG }}
-    >
-      {/* Soft, even key light — reads closer to a drafting reference than a
-          dramatic render, which is what background previz actually wants. */}
-      <hemisphereLight args={["#ffffff", "#d9d9d4", 2.0]} />
-      <directionalLight
-        position={[8, 14, 6]}
-        intensity={1.1}
-        castShadow
-        shadow-mapSize={[2048, 2048]}
-        shadow-bias={-0.0005}
-      />
+    <div className="relative h-full w-full">
+      <Canvas
+        frameloop="demand"
+        shadows
+        dpr={[1, 2]}
+        // No camera prop: CameraRig owns the camera, because the projection
+        // can be switched at runtime and the Canvas prop only applies once.
+        gl={{ antialias: true, preserveDrawingBuffer: true }}
+        // Clicking empty space clears the selection -- but not when the click
+        // was the end of a gizmo drag that happened to miss a mesh, and not
+        // when shift is held, since an additive modifier should never be the
+        // thing that throws a selection away.
+        onPointerMissed={(e) => {
+          if (useEditorStore.getState().isDragging) return;
+          if (e.shiftKey) return;
+          select(null);
+        }}
+        style={{ background: VIEWPORT_BG }}
+      >
+        {/* Soft, even key light — reads closer to a drafting reference than a
+            dramatic render, which is what background previz actually wants. */}
+        <hemisphereLight args={["#ffffff", "#d9d9d4", 2.0]} />
+        <directionalLight
+          position={[8, 14, 6]}
+          intensity={1.1}
+          castShadow
+          shadow-mapSize={[2048, 2048]}
+          shadow-bias={-0.0005}
+        />
 
-      <Grid
-        args={[40, 40]}
-        cellSize={1}
-        cellThickness={0.7}
-        cellColor={GRID_CELL_COLOR}
-        sectionSize={5}
-        sectionThickness={1.2}
-        sectionColor={GRID_SECTION_COLOR}
-        fadeDistance={70}
-        fadeStrength={1}
-        infiniteGrid
-        followCamera={false}
-      />
+        <Grid
+          args={[40, 40]}
+          cellSize={1}
+          cellThickness={0.7}
+          cellColor={GRID_CELL_COLOR}
+          sectionSize={5}
+          sectionThickness={1.2}
+          sectionColor={GRID_SECTION_COLOR}
+          fadeDistance={70}
+          fadeStrength={1}
+          infiniteGrid
+          followCamera={false}
+        />
 
-      <SceneTree />
-      <SelectionGizmo />
+        <CameraRig />
+        <GroundRuler />
+        <SceneTree />
+        <SelectionGizmo />
+        <ViewportProbe />
 
-      {/* makeDefault lets TransformControls find and disable orbiting while a
-          gizmo handle is being dragged. */}
-      <OrbitControls
-        makeDefault
-        enabled={!isDragging}
-        enableDamping
-        dampingFactor={0.12}
-      />
-    </Canvas>
+        {/* makeDefault lets TransformControls find and disable orbiting while a
+            gizmo handle is being dragged, and publishes the orbit target that
+            ViewportProbe measures the focus distance against. */}
+        <OrbitControls
+          makeDefault
+          enabled={!isDragging}
+          enableDamping
+          dampingFactor={0.12}
+        />
+      </Canvas>
+
+      <RulerOverlay />
+    </div>
   );
 }

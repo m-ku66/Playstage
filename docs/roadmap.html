@@ -23,6 +23,8 @@
       <span class="chip">Zustand</span>
       <span class="chip">Tailwind v4</span>
       <span class="chip">three-bvh-csg</span>
+      <span class="chip live">01 · 02 · 05 complete</span>
+      <span class="chip open">06 part done</span>
     </div>
   </div>
 </header>
@@ -144,8 +146,9 @@
   <h3>Why materials are keyed by group index</h3>
   <p>A Three.js <code>BoxGeometry</code> ships with six material groups, one per face. <code>CylinderGeometry</code> has three (side, top cap, bottom cap). Per-face texturing is therefore native — assign a different material to each slot and you are done, no UV unwrapping. <code>PRIMITIVE_GROUP_COUNT</code> records how many slots each primitive exposes.</p>
 
-  <h3>Two stores, one document</h3>
-  <p><code>sceneStore</code> holds the document — objects, hotspots, textures. <code>editorStore</code> holds how you are looking at it — selection, gizmo mode, snap settings. The split matters because undo/redo will snapshot the document only. Pressing Ctrl+Z should never flip your gizmo back to rotate mode or re-select something.</p>
+  <h3>One document, several view stores</h3>
+  <p><code>sceneStore</code> holds the document — objects, hotspots, textures — and it is the only thing undo/redo snapshots. Pressing Ctrl+Z must never flip your gizmo back to rotate mode or move the file on disk.</p>
+  <p>Everything else is split out by what it is <em>for</em>, and none of it is saved: <code>editorStore</code> (selection, gizmo mode, snapping, units, ruler toggles), <code>documentStore</code> (the file path, and whether IO is in flight), <code>cameraStore</code> (projection mode and queued camera moves), <code>viewStore</code> (measurements read back out of the live view), <code>nodeStore</code> (live Three objects by id) and <code>historyStore</code> (the stacks themselves).</p>
 
   <h3>Scene file</h3>
   <p>A JSON document: <code>{ format, version, name, objects, hotspots, textures }</code>. Versioned from the start so old scenes can be migrated rather than broken.</p>
@@ -154,6 +157,11 @@
 <section id="phases">
   <h2><span class="num">05</span>Build phases</h2>
   <p class="section-sub">Each phase is independently usable. Nothing is half-wired across a boundary.</p>
+
+  <div class="callout note">
+    <span class="k">Order as actually built</span>
+    <p>01 → 02 → an unplanned interaction milestone → 06 (save and load) → 05 → 03 next. Persistence jumped the queue because nothing survived closing the window, which made the tool unusable on a real page and made every later phase more expensive to test. Camera work followed so that image export has angles worth exporting.</p>
+  </div>
 
   <div class="phases">
 
@@ -195,6 +203,25 @@
 
     <div class="phase">
       <div class="phase-head">
+        <span class="phase-n">—</span>
+        <span class="phase-title">Interaction and measurement</span>
+        <span class="tag done">Complete</span>
+      </div>
+      <ul>
+        <li><strong>Multi-select</strong> — shift-click in viewport and outliner, batch delete / duplicate / hide / lock</li>
+        <li><strong>Locking</strong> — objects that clicks pass straight through, without cascading to children</li>
+        <li><strong>Pick resolution</strong> — a click on a grouped object selects its outermost group</li>
+        <li><strong>Group and ungroup from a selection</strong>, with the group's pivot at the selection centroid</li>
+        <li><strong>Real-world units</strong> — one unit is one metre, metric/imperial display, size readout</li>
+        <li><strong>Two rulers</strong> — exact ground-plane ticks, plus screen-edge strips that admit their own limits</li>
+        <li><strong>Toolbar declutter</strong> — seven geometry buttons became one menu; the key legend became a modal</li>
+      </ul>
+      <div class="ships"><b>Ships</b>The editor stops fighting you once a scene has more than a few objects in it.</div>
+      <div class="links">→ <a href="interaction.html">Interaction milestone doc</a> · unplanned, driven by using the tool</div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-head">
         <span class="phase-n">03</span>
         <span class="phase-title">Textures</span>
         <span class="tag next">Next</span>
@@ -229,32 +256,38 @@
     <div class="phase">
       <div class="phase-head">
         <span class="phase-n">05</span>
-        <span class="phase-title">Camera hotspots</span>
-        <span class="tag later">Planned</span>
+        <span class="phase-title">Camera</span>
+        <span class="tag done">Complete</span>
       </div>
       <ul>
-        <li><strong>Save current view</strong> as a named hotspot</li>
-        <li><strong>Instant snap</strong> between saved angles</li>
-        <li><strong>Hotspot panel</strong> with rename, reorder, update-in-place</li>
-        <li><strong>FOV and framing controls</strong>, panel aspect-ratio guides</li>
+        <li><strong>Save current view</strong> as a named hotspot, recapture in place, rename, delete</li>
+        <li><strong>Instant snap</strong> between saved angles, in the lower third of the left panel</li>
+        <li><strong>Axis views</strong> — Blender's numpad layout, with Ctrl for the opposite side and 9 to flip</li>
+        <li><strong>Orthographic mode</strong> — a front view becomes a true elevation, and the edge rulers become exact</li>
+        <li><strong>Per-hotspot field of view</strong>, clamped to a usable lens range</li>
       </ul>
       <div class="ships"><b>Ships</b>One scene serves every panel on the page.</div>
+      <div class="links">→ <a href="phase-05.html">Phase 05 milestone doc</a> · no aspect-ratio guides yet; projection is not stored per hotspot</div>
     </div>
 
     <div class="phase">
       <div class="phase-head">
         <span class="phase-n">06</span>
         <span class="phase-title">Persistence and export</span>
-        <span class="tag later">Planned</span>
+        <span class="tag done">Save / load</span>
+        <span class="tag later">Export</span>
       </div>
       <ul>
-        <li><strong>Rust commands</strong> for scene save and load, native file dialogs</li>
-        <li><strong>Recent files</strong>, unsaved-changes guard</li>
+        <li><strong>Rust commands</strong> for scene save and load, native file dialogs — <em>done, with an atomic write</em></li>
+        <li><strong>Versioned <code>.playstage</code> format</strong> and a loader that repairs a damaged file — <em>done</em></li>
+        <li><strong>Unsaved-changes guard</strong> on New and Open — <em>done</em>; on window close, not yet</li>
+        <li><strong>Recent files</strong>, window title reflecting the document</li>
         <li><strong>PNG export</strong> at arbitrary resolution, not just viewport size</li>
         <li><strong>Batch export</strong> — render every hotspot in one pass</li>
         <li><strong>Texture packing</strong> so a scene file is portable</li>
       </ul>
       <div class="ships"><b>Ships</b>The tool becomes part of an actual page workflow.</div>
+      <div class="links">→ <a href="phase-06.html">Phase 06 milestone doc</a> · built before phase 03, so the tool became usable sooner</div>
     </div>
 
   </div>
@@ -297,24 +330,39 @@
 
 <section id="layout">
   <h2><span class="num">07</span>Project layout</h2>
-  <p class="section-sub">Where things live as of the end of phase 02.</p>
+  <p class="section-sub">Where things live as of phase 05.</p>
 
 <pre class="tree"><b>playstage/</b>
 ├─ <b>docs/</b>
 │  ├─ doc.css                 <span class="c">shared doc styling</span>
 │  ├─ roadmap.html            <span class="c">this document</span>
-│  └─ phase-02.html           <span class="c">current milestone</span>
+│  ├─ phase-02.html           <span class="c">direct manipulation</span>
+│  ├─ <span class="new">interaction.html</span>         <span class="c">selection, grouping, units</span>
+│  ├─ <span class="new">phase-05.html</span>            <span class="c">camera</span>
+│  └─ <span class="new">phase-06.html</span>            <span class="c">persistence</span>
 ├─ <b>src/</b>
 │  ├─ <b>types/</b>
 │  │  └─ scene.ts             <span class="c">data model + on-disk format</span>
 │  ├─ <b>geometry/</b>
 │  │  ├─ buildGeometry.ts     <span class="c">GeometrySpec → BufferGeometry</span>
-│  │  └─ transforms.ts        <span class="c">world/local matrix maths</span>
+│  │  ├─ <span class="new">measure.ts</span>            <span class="c">bounding size, kept out of the builder</span>
+│  │  └─ transforms.ts        <span class="c">world/local matrix maths, centroids</span>
 │  ├─ <b>scene/</b>
-│  │  └─ hierarchy.ts         <span class="c">pure list ops — subtree, reorder</span>
+│  │  ├─ hierarchy.ts         <span class="c">pure list ops — subtree, reorder</span>
+│  │  ├─ <span class="new">selection.ts</span>          <span class="c">pick resolution, selection roots</span>
+│  │  ├─ <span class="new">views.ts</span>              <span class="c">axis views, flip, pole nudge</span>
+│  │  ├─ <span class="new">hotspots.ts</span>           <span class="c">saved angles, lens clamping</span>
+│  │  └─ <span class="new">units.ts</span>              <span class="c">metres/feet, ruler tick steps</span>
+│  ├─ <b><span class="new">io/</span></b>
+│  │  ├─ sceneFile.ts         <span class="c">serialize + repairing parser</span>
+│  │  ├─ nativeFs.ts          <span class="c">the only place that talks to the OS</span>
+│  │  └─ documentActions.ts   <span class="c">New / Open / Save sequencing</span>
 │  ├─ <b>store/</b>
 │  │  ├─ sceneStore.ts        <span class="c">the document</span>
-│  │  ├─ editorStore.ts       <span class="c">selection, gizmo mode, snapping</span>
+│  │  ├─ editorStore.ts       <span class="c">selection, gizmo, snapping, units</span>
+│  │  ├─ <span class="new">documentStore.ts</span>      <span class="c">file path, IO in flight</span>
+│  │  ├─ <span class="new">cameraStore.ts</span>        <span class="c">projection mode, queued moves</span>
+│  │  ├─ <span class="new">viewStore.ts</span>          <span class="c">measurements read out of the view</span>
 │  │  ├─ historyStore.ts      <span class="c">undo/redo stacks</span>
 │  │  ├─ devFreeze.ts         <span class="c">dev-only mutation guard</span>
 │  │  └─ nodeStore.ts         <span class="c">live Three nodes by object id</span>
@@ -322,30 +370,52 @@
 │  │  └─ useKeyboardShortcuts.ts
 │  ├─ <b>components/</b>
 │  │  ├─ Viewport.tsx         <span class="c">R3F canvas, grid, lights, controls</span>
+│  │  ├─ <span class="new">CameraRig.tsx</span>         <span class="c">active camera + queued moves</span>
+│  │  ├─ <span class="new">ViewportProbe.tsx</span>     <span class="c">publishes scale and camera pose</span>
+│  │  ├─ <span class="new">GroundRuler.tsx</span>       <span class="c">3D tick marks, one draw call</span>
+│  │  ├─ <span class="new">RulerOverlay.tsx</span>      <span class="c">DOM ruler numbers and edge strips</span>
 │  │  ├─ SceneObjectView.tsx  <span class="c">recursive render; owns dispose</span>
 │  │  ├─ SelectionGizmo.tsx   <span class="c">gizmo, mounted at scene root</span>
 │  │  ├─ Toolbar.tsx
-│  │  ├─ Outliner.tsx
+│  │  ├─ <span class="new">AddMenu.tsx</span>           <span class="c">shapes and grouping in one menu</span>
+│  │  ├─ <span class="new">LeftPanel.tsx</span>         <span class="c">70/30 split wrapper</span>
+│  │  ├─ Outliner.tsx         <span class="c">scene tree</span>
+│  │  ├─ <span class="new">HotspotPanel.tsx</span>      <span class="c">saved camera angles</span>
+│  │  ├─ <span class="new">ShortcutsModal.tsx</span>    <span class="c">the keyboard reference</span>
 │  │  ├─ NumberField.tsx      <span class="c">draft-state numeric input</span>
 │  │  └─ Inspector.tsx
 │  ├─ App.tsx
 │  ├─ main.tsx
 │  └─ styles.css              <span class="c">Tailwind theme tokens</span>
 ├─ <b>scripts/</b>
-│  ├─ verify-transforms.mjs   <span class="c">reparent maths test harness</span>
-│  ├─ verify-params.mjs       <span class="c">spec/builder consistency check</span>
-│  └─ verify-hierarchy.mjs    <span class="c">imports the real source</span>
-└─ <b>src-tauri/</b>            <span class="c">Rust shell — untouched so far</span></pre>
+│  ├─ <span class="new">register-ts.mjs</span>          <span class="c">resolver hook for the harnesses</span>
+│  ├─ <span class="new">ts-extension-hook.mjs</span>    <span class="c">extensionless .ts resolution</span>
+│  ├─ verify-hierarchy.mjs    <span class="c">imports the real source</span>
+│  ├─ <span class="new">verify-selection.mjs</span>
+│  ├─ <span class="new">verify-grouping.mjs</span>
+│  ├─ <span class="new">verify-views.mjs</span>
+│  ├─ <span class="new">verify-hotspots.mjs</span>
+│  ├─ <span class="new">verify-units.mjs</span>
+│  ├─ <span class="new">verify-scenefile.mjs</span>     <span class="c">34 cases of hostile input</span>
+│  ├─ verify-transforms.mjs   <span class="c">reparent maths</span>
+│  └─ verify-params.mjs       <span class="c">spec/builder consistency</span>
+└─ <b>src-tauri/</b>
+   └─ src/lib.rs              <span class="new">read_text_file, write_text_file</span></pre>
 
   <h3>Running it</h3>
 <pre><code>npm run tauri dev     <span class="c"># dev build, hot reload</span>
 npm run tauri build   <span class="c"># production binary</span>
 npm run typecheck     <span class="c"># tsc --noEmit</span>
-npm run verify        <span class="c"># all three test harnesses</span></code></pre>
+npm run verify        <span class="c"># all nine test harnesses</span></code></pre>
 </section>
 
 <footer>
-  Playstage roadmap · phases 01 and 02 complete — see the <a href="phase-02.html">phase 02 milestone doc</a> · next up phase 03, textures.
+  Playstage roadmap · phases 01, 02 and 05 complete, 06 half done · milestone docs:
+  <a href="phase-02.html">02</a> ·
+  <a href="interaction.html">interaction</a> ·
+  <a href="phase-05.html">05</a> ·
+  <a href="phase-06.html">06</a>
+  · next up phase 03, textures.
 </footer>
 
 </main>

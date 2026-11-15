@@ -87,6 +87,60 @@ export function localTransformUnderParent(
   return matrixToTransform(newLocal);
 }
 
+/** World-space origin of an object, i.e. the translation of its world matrix. */
+export function worldOriginOf(id: string, byId: ObjectIndex): Vec3 {
+  const e = worldMatrix(id, byId).elements;
+  return [e[12], e[13], e[14]];
+}
+
+/**
+ * Average of the world-space origins of several objects.
+ *
+ * This is where a new group's pivot goes. Origins rather than bounding-box
+ * centres: every primitive is built centred on its own origin, so the two
+ * agree for a single object, and averaging origins needs no geometry
+ * evaluation -- which keeps this a pure function over the store's data,
+ * testable without a renderer.
+ */
+export function worldCentroid(
+  ids: readonly string[],
+  byId: ObjectIndex,
+): Vec3 {
+  if (ids.length === 0) return [0, 0, 0];
+
+  let x = 0;
+  let y = 0;
+  let z = 0;
+  for (const id of ids) {
+    const [ox, oy, oz] = worldOriginOf(id, byId);
+    x += ox;
+    y += oy;
+    z += oz;
+  }
+  return [x / ids.length, y / ids.length, z / ids.length];
+}
+
+/**
+ * The local position an object needs under `parentId` to sit at `world`.
+ *
+ * Used when a new group is created inside an existing one: the pivot is
+ * computed in world space, but the group is stored with a local transform.
+ */
+export function worldToLocalPosition(
+  world: Vec3,
+  parentId: string | null,
+  byId: ObjectIndex,
+): Vec3 {
+  if (!parentId) return [...world];
+
+  // worldMatrix returns a fresh matrix, so inverting it in place is safe.
+  const inverse = worldMatrix(parentId, byId).invert();
+  const local = new THREE.Vector3(world[0], world[1], world[2]).applyMatrix4(
+    inverse,
+  );
+  return [local.x, local.y, local.z];
+}
+
 /** True when `candidateId` sits somewhere beneath `ancestorId`. */
 export function isDescendantOf(
   candidateId: string,

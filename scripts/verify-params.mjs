@@ -59,7 +59,13 @@ function parseSpecs(source) {
 function parseBuilderUsage(source) {
   const start = source.indexOf("function buildPrimitive");
   if (start === -1) throw new Error("buildPrimitive not found");
-  const body = source.slice(start);
+
+  // Bounded to this function. Scanning to end-of-file meant any later switch
+  // over the same primitive names -- a measurement helper, say -- silently
+  // became the thing under test. A closing brace in column zero is the end of
+  // the function; every nested one is indented.
+  const end = source.indexOf("\n}", start);
+  const body = source.slice(start, end === -1 ? undefined : end);
 
   const usage = {};
   const cases = [...body.matchAll(/case "(\w+)":/g)];

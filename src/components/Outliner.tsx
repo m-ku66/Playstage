@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { DragEvent } from "react";
+import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import type { SceneObject } from "../types/scene";
 import {
   canReparent,
@@ -8,7 +8,7 @@ import {
 } from "../geometry/transforms";
 import { nextSiblingId } from "../scene/hierarchy";
 import { useSceneStore } from "../store/sceneStore";
-import { useEditorStore } from "../store/editorStore";
+import { useEditorStore, useSelectedIds } from "../store/editorStore";
 
 const DRAG_MIME = "application/x-playstage-object";
 const INDENT_PX = 14;
@@ -24,12 +24,14 @@ interface DropIntent {
 export function Outliner() {
   const objects = useSceneStore((s) => s.objects);
   const setVisible = useSceneStore((s) => s.setVisible);
+  const setLocked = useSceneStore((s) => s.setLocked);
   const deleteObject = useSceneStore((s) => s.deleteObject);
   const duplicateObject = useSceneStore((s) => s.duplicateObject);
   const moveObject = useSceneStore((s) => s.moveObject);
 
-  const selectedId = useEditorStore((s) => s.selectedId);
+  const selectedIds = useSelectedIds();
   const select = useEditorStore((s) => s.select);
+  const toggleSelected = useEditorStore((s) => s.toggleSelected);
   const collapsed = useEditorStore((s) => s.collapsed);
   const toggleCollapsed = useEditorStore((s) => s.toggleCollapsed);
 
@@ -44,6 +46,9 @@ export function Outliner() {
   const byId = useMemo(() => indexObjects(objects), [objects]);
   const childrenOf = useMemo(() => childrenByParent(objects), [objects]);
   const roots = childrenOf.get(null) ?? [];
+
+  /** The most recently selected id drives the "active" styling. */
+  const primaryId = selectedIds[selectedIds.length - 1] ?? null;
 
   /** Resolves a hover into the (parent, before) pair moveObject wants. */
   const resolveDrop = (
@@ -80,8 +85,22 @@ export function Outliner() {
     return "inside";
   };
 
+  /**
+   * The outliner is the only place a group member can be selected, since
+   * viewport clicks resolve to the outermost group instead.
+   *
+   * A locked object refuses selection here too -- that is what locking means --
+   * but its own lock button stays live, so there is always a way back.
+   */
+  const handleRowClick = (e: ReactMouseEvent, object: SceneObject) => {
+    if (object.locked) return;
+    if (e.shiftKey || e.ctrlKey || e.metaKey) toggleSelected(object.id);
+    else select(object.id);
+  };
+
   const renderRow = (object: SceneObject, depth: number) => {
-    const active = object.id === selectedId;
+    const selected = selectedIds.includes(object.id);
+    const active = object.id === primaryId;
     const children = childrenOf.get(object.id);
     const hasChildren = Boolean(children?.length);
     const isCollapsed = Boolean(collapsed[object.id]);
@@ -124,13 +143,19 @@ export function Outliner() {
             }
             clearDrag();
           }}
-          onClick={() => select(object.id)}
+          onClick={(e) => handleRowClick(e, object)}
           style={{ paddingLeft: 4 + depth * INDENT_PX }}
           className={`group relative flex cursor-default items-center gap-1.5 rounded-md py-1.5 pr-2 text-[13px] transition-colors ${
             showing === "inside"
               ? "bg-stage-accent-soft ring-1 ring-stage-accent"
-              : active
-                ? "bg-stage-accent-soft text-stage-accent"
+              : selected
+                ? // The active object gets a ring so a multiple selection
+                  // still shows which one the inspector is describing.
+                  `bg-stage-accent-soft text-stage-accent ${
+                    active && selectedIds.length > 1
+                      ? "ring-1 ring-stage-accent"
+                      : ""
+                  }`
                 : "text-stage-ink hover:bg-stage-field"
           } ${beingDragged ? "opacity-40" : ""}`}
         >
@@ -169,7 +194,16 @@ export function Outliner() {
             {object.visible ? "●" : "○"}
           </button>
 
-          <span className="flex-1 truncate">
+          <span
+            title={
+              object.locked
+                ? "Locked — use the ⊘ button to unlock"
+                : undefined
+            }
+            className={`flex-1 truncate ${
+              object.locked ? "italic text-stage-faint" : ""
+            }`}
+          >
             {object.name}
             {isGroup && hasChildren && isCollapsed && (
               <span className="ml-1.5 font-mono text-[10px] text-stage-faint">
@@ -177,6 +211,24 @@ export function Outliner() {
               </span>
             )}
           </span>
+
+          {/* Stays visible while locked, so the way out is always on screen. */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setLocked(object.id, !object.locked);
+            }}
+            title={
+              object.locked ? "Unlock (L)" : "Lock — stop it being clicked (L)"
+            }
+            className={`shrink-0 text-[11px] leading-none transition-colors ${
+              object.locked
+                ? "text-stage-accent hover:text-stage-ink"
+                : "invisible text-stage-faint hover:text-stage-ink group-hover:visible"
+            }`}
+          >
+            ⊘
+          </button>
 
           <button
             onClick={(e) => {
@@ -208,9 +260,16 @@ export function Outliner() {
   };
 
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-r border-stage-line bg-stage-panel">
-      <div className="px-4 pt-4 pb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-stage-faint">
-        Scene
+    <section className="flex min-h-0 flex-[7] flex-col">
+      <div className="flex items-baseline justify-between px-4 pt-4 pb-2">
+        <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-stage-faint">
+          Scene
+        </span>
+        {selectedIds.length > 1 && (
+          <span className="font-mono text-[10px] text-stage-accent">
+            {selectedIds.length} selected
+          </span>
+        )}
       </div>
 
       {/* The empty area below the list is the "move to top level" target. */}
@@ -249,8 +308,7 @@ export function Outliner() {
         )}
       </div>
 
-      <ShortcutLegend />
-    </aside>
+    </section>
   );
 }
 
@@ -261,34 +319,5 @@ function InsertLine({ edge }: { edge: "top" | "bottom" }) {
         edge === "top" ? "top-0" : "bottom-0"
       }`}
     />
-  );
-}
-
-const SHORTCUTS: [string, string][] = [
-  ["W / E / R", "Move / Rotate / Scale"],
-  ["X", "Toggle snap"],
-  ["H", "Hide / show"],
-  ["Ctrl+D", "Duplicate"],
-  ["Ctrl+Z", "Undo"],
-  ["Ctrl+⇧Z", "Redo"],
-  ["Del", "Delete"],
-  ["Esc", "Deselect"],
-];
-
-function ShortcutLegend() {
-  return (
-    <div className="border-t border-stage-line px-4 py-3">
-      <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-stage-faint">
-        Keys
-      </div>
-      <dl className="space-y-1">
-        {SHORTCUTS.map(([key, label]) => (
-          <div key={key} className="flex items-baseline justify-between gap-2">
-            <dt className="font-mono text-[10px] text-stage-muted">{key}</dt>
-            <dd className="truncate text-[11px] text-stage-faint">{label}</dd>
-          </div>
-        ))}
-      </dl>
-    </div>
   );
 }

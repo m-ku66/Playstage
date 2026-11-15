@@ -10,6 +10,7 @@ import type {
   Vec2,
   Vec3,
 } from "../types/scene";
+import { FOV_DEFAULT, clampFov } from "../scene/hotspots";
 import {
   DEFAULT_MATERIAL,
   PRIMITIVE_GROUP_COUNT,
@@ -53,9 +54,6 @@ export const SCENE_FILTER_NAME = "Playstage scene";
 
 /** Smallest scale magnitude allowed, to keep parent matrices invertible. */
 const MIN_SCALE = 1e-4;
-
-const FOV_MIN = 10;
-const FOV_MAX = 120;
 
 /** Thrown for a file we cannot meaningfully open at all. */
 export class SceneFileError extends Error {
@@ -474,14 +472,14 @@ function parseHotspots(value: unknown, warnings: string[]): CameraHotspot[] {
     if (!id || seen.has(id)) id = crypto.randomUUID();
     seen.add(id);
 
-    const fov = asFiniteNumber(entry.fov, 50);
-
     out.push({
       id,
       name: asString(entry.name, "View"),
       position: asVec3(entry.position, [6, 5, 8]),
       target: asVec3(entry.target, [0, 0, 0]),
-      fov: Math.min(FOV_MAX, Math.max(FOV_MIN, fov)),
+      // Shared with the inspector input, so a hand-edited file and a typed
+      // value cannot disagree about what counts as a usable lens.
+      fov: clampFov(asFiniteNumber(entry.fov, FOV_DEFAULT)),
     });
   }
 

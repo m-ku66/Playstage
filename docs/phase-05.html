@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Playstage — Phase 05: Camera</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="doc.css" />
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <p class="eyebrow"><a href="roadmap.html">Roadmap</a> / Phase 05</p>
+    <h1>Camera</h1>
+    <p class="lede">Saved angles you can flick between, axis views on the numpad, and an orthographic mode that turns a front view into a true elevation. One scene serves every panel on the page.</p>
+    <div class="meta">
+      <span class="chip live">Complete</span>
+      <span class="chip">Hotspots</span>
+      <span class="chip">Blender-style numpad</span>
+      <span class="chip">Orthographic</span>
+      <span class="chip">27 tests</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<nav class="toc">
+  <div class="toc-label">Contents</div>
+  <a href="#rig"><span class="num">01</span>The camera rig</a>
+  <a href="#axis"><span class="num">02</span>Axis views</a>
+  <a href="#ortho"><span class="num">03</span>Orthographic</a>
+  <a href="#hotspots"><span class="num">04</span>Saved angles</a>
+  <a href="#limits"><span class="num">05</span>Known limits</a>
+</nav>
+
+<main>
+
+<section id="rig">
+  <h2><span class="num">01</span>The camera rig</h2>
+  <p class="section-sub"><code>src/components/CameraRig.tsx</code> owns the camera; <code>cameraStore</code> owns the requests.</p>
+
+  <p>The camera lives inside the Canvas, so the store cannot hold it. It holds <em>requests</em> instead: a button or a keypress queues one, and the rig applies it on the next frame, where the live camera and orbit controls are in hand.</p>
+
+<pre><code><span class="kw">type</span> CameraRequest =
+  | { kind: <span class="kw">"view"</span>; view: ViewName; nonce }   <span class="c">// snap, keeping distance</span>
+  | { kind: <span class="kw">"flip"</span>; nonce }                   <span class="c">// read camera, then invert</span>
+  | { kind: <span class="kw">"pose"</span>; position; target; fov; nonce }  <span class="c">// absolute</span></code></pre>
+
+  <div class="callout why">
+    <span class="k">Why a union, and why a nonce</span>
+    <p>These are three different operations, not three settings on one. Snapping preserves your zoom; flipping has to read the camera before it knows where to go; a hotspot sets an absolute pose and keeps nothing.</p>
+    <p>The nonce is what makes a repeat request work. Asking for "front" twice running is a real thing to do — orbit away, press 1 again — and a plain value would look unchanged to React.</p>
+  </div>
+
+  <h3>Surviving a projection swap</h3>
+  <p>Switching between perspective and orthographic replaces the camera object, and OrbitControls rebuilds itself around the new one with its target back at the origin. The old position and target are remembered on every quiet frame and re-applied afterwards.</p>
+
+  <div class="callout watch">
+    <span class="k">Why the restore runs in useFrame</span>
+    <p>Not in an effect. A frame callback is handed live state, so <code>state.camera</code> is definitely the <em>new</em> camera — whereas an effect would depend on the order sibling effects happen to run in, and a hook value read during that render is still the old one. It re-applies for two frames, because there is no guarantee <code>state.controls</code> points at the finished new OrbitControls on the first.</p>
+  </div>
+</section>
+
+<section id="axis">
+  <h2><span class="num">02</span>Axis views</h2>
+  <p class="section-sub">Blender's layout, because that is the one already in muscle memory.</p>
+
+  <table>
+    <thead><tr><th>Key</th><th>Does</th></tr></thead>
+    <tbody>
+      <tr><td>1 / 3 / 7</td><td>Front / Right / Top</td></tr>
+      <tr><td>Ctrl + 1 / 3 / 7</td><td>Back / Left / Bottom</td></tr>
+      <tr><td>9</td><td>Flip to the opposite side</td></tr>
+      <tr><td>5</td><td>Perspective / orthographic</td></tr>
+    </tbody>
+  </table>
+
+  <p>Bound on <code>event.code</code>, not <code>event.key</code>: with Num Lock off the numpad reports its keys as Home, End and PageUp, so <code>key</code> would miss them entirely. The number row is bound to the same views, since plenty of keyboards have no numpad at all.</p>
+
+  <h3>Flip reads the camera</h3>
+  <p>Rather than remembering which button was pressed last — which goes stale the moment the user orbits by hand — <code>nearestView</code> works out which axis the camera is actually closest to, and the flip inverts that. Ties resolve in a fixed order so a perfect diagonal is deterministic.</p>
+
+  <h3>Snapping preserves distance and target</h3>
+  <p>A view is applied as <em>target plus direction times the current distance</em>, so pressing 1 does not also change how far out you were zoomed, and it works on whatever you have panned over to instead of yanking the camera home.</p>
+
+  <div class="callout why">
+    <span class="k">The pole problem</span>
+    <p>A top view looks straight along the camera's own up axis, where <code>lookAt</code> has no way to orient the roll and the view collapses. The obvious fix is to swap <code>camera.up</code> to Z — but <strong>OrbitControls uses that as its polar axis</strong>, so changing it makes every subsequent orbit feel rotated.</p>
+    <p>The camera is nudged a thousandth of its distance off the pole instead. <code>lookAt</code> stays well conditioned, orbiting stays sane, and it lands the plan view the right way round for free: with up still Y, a camera just past +Y puts world +X at screen right and world +Z down the screen, which is how a floor plan reads.</p>
+  </div>
+</section>
+
+<section id="ortho">
+  <h2><span class="num">03</span>Orthographic</h2>
+  <p class="section-sub">Not a side feature — it is what makes an axis view worth having.</p>
+
+  <p>Under perspective, a "front view" still converges: parallel edges on the far side of a wall tilt toward a vanishing point. That is exactly what you do <em>not</em> want to trace. A parallel projection makes a front view a true elevation and a top view a true plan.</p>
+
+  <h3>Two things fall out of it</h3>
+  <ul>
+    <li><strong>The edge rulers become exact.</strong> A parallel projection has one scale at every depth, so the strip drops its "scale at 8.4 m depth" caveat and reads "exact at any depth" instead.</li>
+    <li><strong>Framing carries across the switch.</strong> The orthographic zoom is seeded from what the perspective view was measuring at its focus plane, so toggling does not jump.</li>
+  </ul>
+
+  <p>The near plane is negative, so geometry between the camera and its target is never clipped — in an axis view the camera often ends up inside the bounds of what you are drawing.</p>
+</section>
+
+<section id="hotspots">
+  <h2><span class="num">04</span>Saved angles</h2>
+  <p class="section-sub"><code>HotspotPanel</code> in the lower third of the left panel.</p>
+
+  <p>The data model needed no work. <code>CameraHotspot</code>, <code>SceneFile.hotspots</code> and the history snapshot shape were all laid down in phase 01, and the phase 06 loader already validated them. So saved angles round-trip through a <code>.playstage</code> file and undo like any other edit, for free.</p>
+
+  <ul>
+    <li><strong>+ Save</strong> captures wherever the camera is now</li>
+    <li><strong>Click a row</strong> to restore that angle</li>
+    <li><strong>⟲ Recapture</strong> replaces the pose, keeping the name</li>
+    <li><strong>Active row expands</strong> to a name field and a field-of-view control</li>
+  </ul>
+
+  <div class="callout why">
+    <span class="k">Capture is a read, not a subscription</span>
+    <p>The live camera pose is published to <code>viewStore</code> by <code>ViewportProbe</code> on each rendered frame, and the panel reads it with <code>getState()</code> at the moment of the click. Subscribing would re-render the panel continuously through an orbit for nothing.</p>
+    <p><code>makeHotspot</code> copies the vectors rather than storing the references it was handed, so a saved angle can never start tracking the live camera.</p>
+  </div>
+
+  <h3>Field of view</h3>
+  <p>Stored per hotspot and clamped to 10–120 degrees. Below 10 is a telephoto so flat it stops reading as a space; above 120 bends straight edges hard enough to be useless as a reference. Those bounds are shared with the scene loader, so a hand-edited file and a typed value cannot disagree about what counts as a usable lens.</p>
+
+  <h3>Panel layout</h3>
+  <p>The left sidebar is split 70/30 by flex weight rather than fixed heights, so both halves work at any window size and each scrolls independently. <code>min-h-0</code> on both is what actually makes that happen — without it a flex child refuses to shrink below its content, the overflow never engages, and the panel grows past the window.</p>
+</section>
+
+<section id="limits">
+  <h2><span class="num">05</span>Known limits</h2>
+  <p class="section-sub">Deliberate, and cheap to lift later.</p>
+
+  <ul class="check">
+    <li class="off"><span class="mark">—</span><strong>Projection is not stored per hotspot.</strong> Restoring an angle while in orthographic keeps you orthographic. Storing it would take the scene format to version 2, which the loader already handles cleanly — it was just not worth bundling into this chunk.</li>
+    <li class="off"><span class="mark">—</span><strong>No shortcut keys</strong> for jumping to a saved angle.</li>
+    <li class="off"><span class="mark">—</span><strong>No viewport markers</strong> showing where saved angles sit in the scene.</li>
+    <li class="off"><span class="mark">—</span><strong>No aspect-ratio guides.</strong> Framing to a panel shape is still by eye.</li>
+    <li class="off"><span class="mark">—</span><strong>Transitions are instant</strong>, not animated. Animating one would need <code>invalidate()</code> driving it, per the roadmap's on-demand rendering rule.</li>
+    <li class="off"><span class="mark">—</span><strong>The 70/30 split is fixed</strong>, not draggable.</li>
+  </ul>
+</section>
+
+<footer>
+  Phase 05 · complete · back to the <a href="roadmap.html">roadmap</a>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

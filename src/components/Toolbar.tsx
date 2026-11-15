@@ -1,23 +1,22 @@
-import type { PrimitiveKind } from "../types/scene";
 import type { TransformMode } from "../store/editorStore";
+import type { UnitSystem } from "../scene/units";
 import { useSceneStore } from "../store/sceneStore";
 import { useEditorStore } from "../store/editorStore";
 import { useDocumentStore } from "../store/documentStore";
+import { useCameraStore } from "../store/cameraStore";
 import { useCanRedo, useCanUndo } from "../store/historyStore";
 import { newScene, openScene, saveScene } from "../io/documentActions";
-
-const PRIMITIVES: { kind: PrimitiveKind; label: string }[] = [
-  { kind: "box", label: "Box" },
-  { kind: "cylinder", label: "Cylinder" },
-  { kind: "sphere", label: "Sphere" },
-  { kind: "cone", label: "Cone" },
-  { kind: "plane", label: "Plane" },
-];
+import { AddMenu } from "./AddMenu";
 
 const MODES: { mode: TransformMode; label: string; hint: string }[] = [
   { mode: "translate", label: "Move", hint: "W" },
   { mode: "rotate", label: "Rotate", hint: "E" },
   { mode: "scale", label: "Scale", hint: "R" },
+];
+
+const UNIT_OPTIONS: { system: UnitSystem; label: string; hint: string }[] = [
+  { system: "metric", label: "m", hint: "Metres and centimetres" },
+  { system: "imperial", label: "ft", hint: "Feet and inches" },
 ];
 
 function Divider() {
@@ -81,16 +80,63 @@ function FileButton({
   );
 }
 
+/** Momentary button inside a segmented cluster — it acts, it is never "on". */
+function ViewButton({
+  label,
+  title,
+  onClick,
+}: {
+  label: string;
+  title: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className="rounded-md px-2 py-1 text-[12px] text-stage-muted transition-colors hover:bg-stage-panel hover:text-stage-ink"
+    >
+      {label}
+    </button>
+  );
+}
+
+/** Small on/off button, styled like Snap. */
+function ToggleButton({
+  label,
+  title,
+  active,
+  onClick,
+}: {
+  label: string;
+  title: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={`rounded-md px-2.5 py-1.5 text-[12px] transition-colors ${
+        active
+          ? "bg-stage-accent-soft text-stage-accent"
+          : "text-stage-faint hover:text-stage-muted"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
 export function Toolbar() {
-  const addPrimitive = useSceneStore((s) => s.addPrimitive);
-  const addGroup = useSceneStore((s) => s.addGroup);
   const sceneName = useSceneStore((s) => s.sceneName);
   const dirty = useSceneStore((s) => s.dirty);
   const count = useSceneStore((s) => s.objects.length);
-  const filePath = useDocumentStore((s) => s.filePath);
-  const busy = useDocumentStore((s) => s.busy);
   const undo = useSceneStore((s) => s.undo);
   const redo = useSceneStore((s) => s.redo);
+
+  const filePath = useDocumentStore((s) => s.filePath);
+  const busy = useDocumentStore((s) => s.busy);
 
   const canUndo = useCanUndo();
   const canRedo = useCanRedo();
@@ -103,6 +149,17 @@ export function Toolbar() {
   const setTranslateSnap = useEditorStore((s) => s.setTranslateSnap);
   const rotateSnapDeg = useEditorStore((s) => s.rotateSnapDeg);
   const setRotateSnapDeg = useEditorStore((s) => s.setRotateSnapDeg);
+  const unitSystem = useEditorStore((s) => s.unitSystem);
+  const setUnitSystem = useEditorStore((s) => s.setUnitSystem);
+  const showGroundRuler = useEditorStore((s) => s.showGroundRuler);
+  const toggleGroundRuler = useEditorStore((s) => s.toggleGroundRuler);
+  const showEdgeRuler = useEditorStore((s) => s.showEdgeRuler);
+  const toggleEdgeRuler = useEditorStore((s) => s.toggleEdgeRuler);
+
+  const requestView = useCameraStore((s) => s.requestView);
+  const flipView = useCameraStore((s) => s.flipView);
+  const orthographic = useCameraStore((s) => s.orthographic);
+  const toggleOrthographic = useCameraStore((s) => s.toggleOrthographic);
 
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 border-b border-stage-line bg-stage-panel px-5">
@@ -169,25 +226,7 @@ export function Toolbar() {
 
       <Divider />
 
-      {/* add primitives */}
-      <div className="flex items-center gap-0.5">
-        {PRIMITIVES.map((p) => (
-          <button
-            key={p.kind}
-            onClick={() => addPrimitive(p.kind)}
-            className="rounded-md px-2.5 py-1.5 text-[13px] text-stage-muted transition-colors hover:bg-stage-accent-soft hover:text-stage-accent"
-          >
-            {p.label}
-          </button>
-        ))}
-        <button
-          onClick={() => addGroup()}
-          title="Add an empty group, then drag objects onto it in the outliner"
-          className="rounded-md px-2.5 py-1.5 text-[13px] text-stage-muted transition-colors hover:bg-stage-accent-soft hover:text-stage-accent"
-        >
-          Group
-        </button>
-      </div>
+      <AddMenu />
 
       <Divider />
 
@@ -213,17 +252,12 @@ export function Toolbar() {
       </div>
 
       {/* snapping */}
-      <button
-        onClick={toggleSnap}
+      <ToggleButton
+        label="Snap"
         title="Toggle snapping (X)"
-        className={`rounded-md px-2.5 py-1.5 text-[12px] transition-colors ${
-          snapEnabled
-            ? "bg-stage-accent-soft text-stage-accent"
-            : "text-stage-faint hover:text-stage-muted"
-        }`}
-      >
-        Snap
-      </button>
+        active={snapEnabled}
+        onClick={toggleSnap}
+      />
 
       {snapEnabled && (
         <div className="flex items-center gap-2">
@@ -262,8 +296,76 @@ export function Toolbar() {
         </div>
       )}
 
-      <div className="ml-auto font-mono text-[11px] text-stage-faint">
-        {count} object{count === 1 ? "" : "s"}
+      <div className="ml-auto flex items-center gap-2">
+        {/* camera views */}
+        <div className="flex items-center gap-0.5 rounded-lg bg-stage-field p-0.5">
+          <ViewButton
+            label="Front"
+            title="Front view (1) — Ctrl+1 for back"
+            onClick={() => requestView("front")}
+          />
+          <ViewButton
+            label="Side"
+            title="Right side view (3) — Ctrl+3 for left"
+            onClick={() => requestView("right")}
+          />
+          <ViewButton
+            label="Top"
+            title="Top view (7) — Ctrl+7 for bottom"
+            onClick={() => requestView("top")}
+          />
+          <ViewButton
+            label="⇄"
+            title="Flip to the opposite side (9)"
+            onClick={flipView}
+          />
+        </div>
+
+        <ToggleButton
+          label="Ortho"
+          title="Orthographic projection (5) — no perspective convergence, so an axis view is a true elevation and the edge rulers are exact everywhere"
+          active={orthographic}
+          onClick={toggleOrthographic}
+        />
+
+        {/* units */}
+        <div className="flex items-center gap-0.5 rounded-lg bg-stage-field p-0.5">
+          {UNIT_OPTIONS.map((u) => {
+            const active = unitSystem === u.system;
+            return (
+              <button
+                key={u.system}
+                onClick={() => setUnitSystem(u.system)}
+                title={u.hint}
+                className={`rounded-md px-2 py-1 font-mono text-[11px] transition-colors ${
+                  active
+                    ? "bg-stage-panel text-stage-ink shadow-[0_1px_2px_rgba(0,0,0,0.06)]"
+                    : "text-stage-muted hover:text-stage-ink"
+                }`}
+              >
+                {u.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* rulers, toggled independently */}
+        <ToggleButton
+          label="Ground"
+          title="Numbered ticks on the ground plane — correct from any camera angle"
+          active={showGroundRuler}
+          onClick={toggleGroundRuler}
+        />
+        <ToggleButton
+          label="Edges"
+          title="Ruler strips on the viewport edges — exact only at the camera's focus depth, unless the view is orthographic"
+          active={showEdgeRuler}
+          onClick={toggleEdgeRuler}
+        />
+
+        <span className="font-mono text-[11px] text-stage-faint">
+          {count} object{count === 1 ? "" : "s"}
+        </span>
       </div>
     </header>
   );
