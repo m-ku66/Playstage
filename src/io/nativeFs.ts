@@ -46,6 +46,21 @@ const SCENE_FILTERS = [
   { name: SCENE_FILTER_NAME, extensions: [SCENE_EXTENSION] },
 ];
 
+/** Kept in step with IMAGE_EXTENSIONS in src-tauri/src/lib.rs. The Rust side
+ *  re-checks, so this list is a convenience for the picker rather than the
+ *  thing enforcing it. */
+const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "bmp"] as const;
+
+const IMAGE_FILTERS = [{ name: "Images", extensions: [...IMAGE_EXTENSIONS] }];
+
+const MIME_BY_EXTENSION: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  bmp: "image/bmp",
+};
+
 /* ------------------------------------------------------------------ */
 /* Paths                                                               */
 /* ------------------------------------------------------------------ */
@@ -56,6 +71,30 @@ export function basename(path: string): string {
   const file = path.split(/[\\/]/).pop() ?? path;
   const dot = file.lastIndexOf(".");
   return dot > 0 ? file.slice(0, dot) : file;
+}
+
+/** Filename with its extension. Used for texture tray tooltips, where the
+ *  extension is part of how you tell two exports of the same art apart. */
+export function filename(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
+}
+
+/** Lowercased extension without the dot, or "" when there is none. */
+export function extensionOf(path: string): string {
+  const file = filename(path);
+  const dot = file.lastIndexOf(".");
+  return dot > 0 ? file.slice(dot + 1).toLowerCase() : "";
+}
+
+/**
+ * Mime type for a Blob built from an image file's bytes.
+ *
+ * The browser sniffs image content regardless, so an octet-stream Blob would
+ * usually still decode -- but a correct type keeps it from ever being treated
+ * as a download, and makes the failure mode of an unknown extension explicit.
+ */
+export function imageMimeType(path: string): string {
+  return MIME_BY_EXTENSION[extensionOf(path)] ?? "application/octet-stream";
 }
 
 /** Ensures the path ends in .playstage. Some platforms' save dialogs return
@@ -83,6 +122,18 @@ export async function writeTextFile(
   await invoke("write_text_file", { path, contents });
 }
 
+/**
+ * Raw bytes of an image file, for decoding into a texture.
+ *
+ * The Rust command returns a `tauri::ipc::Response`, which arrives here as an
+ * ArrayBuffer rather than going through JSON. See read_image_file in
+ * src-tauri/src/lib.rs for why that matters.
+ */
+export async function readImageBytes(path: string): Promise<ArrayBuffer> {
+  requireDesktop();
+  return invoke<ArrayBuffer>("read_image_file", { path });
+}
+
 /* ------------------------------------------------------------------ */
 /* Dialogs                                                             */
 /* ------------------------------------------------------------------ */
@@ -97,6 +148,25 @@ export async function pickScenePath(): Promise<string | null> {
     title: "Open scene",
   });
   return typeof picked === "string" ? picked : null;
+}
+
+/**
+ * Native picker for one or more texture images. Resolves [] on cancel.
+ *
+ * Multi-select is on because importing a wall, a road and a roof in one go is
+ * the normal case when starting a scene. Native file-drop is disabled in this
+ * app (see the phase 02 notes), so this dialog is the only way in.
+ */
+export async function pickImagePaths(): Promise<string[]> {
+  requireDesktop();
+  const picked = await dialogOpen({
+    multiple: true,
+    directory: false,
+    filters: IMAGE_FILTERS,
+    title: "Import textures",
+  });
+  if (picked === null) return [];
+  return Array.isArray(picked) ? picked : [picked];
 }
 
 /** Native save picker. Resolves null when the user cancels. */

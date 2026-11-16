@@ -59,42 +59,6 @@ export function useKeyboardShortcuts() {
       const key = e.key.toLowerCase();
       const typing = isTypingTarget(e.target);
 
-      // --- undo / redo --------------------------------------------------
-      // These stay live even while a field is focused: the browser's own
-      // text undo is not what the user means in an editor like this.
-      if (mod && key === "z") {
-        if (e.shiftKey) scene.redo();
-        else scene.undo();
-        e.preventDefault();
-        return;
-      }
-      if (mod && key === "y") {
-        scene.redo();
-        e.preventDefault();
-        return;
-      }
-
-      // --- document -----------------------------------------------------
-      // Also live while a field is focused. Ctrl+S with the cursor in an
-      // object-name box still means "save the scene", and the alternative --
-      // silently doing nothing -- is how people lose work.
-      if (mod && key === "s") {
-        if (e.shiftKey) void saveSceneAs();
-        else void saveScene();
-        e.preventDefault();
-        return;
-      }
-      if (mod && key === "o") {
-        void openScene();
-        e.preventDefault();
-        return;
-      }
-      if (mod && key === "n") {
-        void newScene();
-        e.preventDefault();
-        return;
-      }
-
       // Everything below is a bare letter or digit, so never steal it
       // mid-typing -- otherwise entering a position of 1 would also fling the
       // camera to the front view.
@@ -206,7 +170,64 @@ export function useKeyboardShortcuts() {
       }
     };
 
+    /**
+     * Document and history shortcuts, in the CAPTURE phase.
+     *
+     * Split out of the handler above and registered with `capture: true` so
+     * they run on the way DOWN the tree, before any element can see the event.
+     *
+     * The reason is blast radius. The main handler is a bubble-phase listener
+     * on window, which means it only fires if nothing between the focused
+     * element and window called stopPropagation on the way up -- and React
+     * attaches its listeners at the root container, below window, so a single
+     * `e.stopPropagation()` in any component's onKeyDown silently kills every
+     * global shortcut while that element has focus. For a gizmo-mode key that
+     * is a shrug. For Ctrl+S it means losing work, and the failure is invisible
+     * because nothing happens and nothing is logged.
+     *
+     * These five are also the shortcuts that should fire regardless of focus:
+     * Ctrl+S with the cursor in a texture-name box still means "save the
+     * scene", and the editor's undo is what Ctrl+Z means here, not the
+     * browser's text undo.
+     */
+    const onDocumentKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+
+      const scene = useSceneStore.getState();
+
+      switch (e.key.toLowerCase()) {
+        case "z":
+          if (e.shiftKey) scene.redo();
+          else scene.undo();
+          break;
+        case "y":
+          scene.redo();
+          break;
+        case "s":
+          if (e.shiftKey) void saveSceneAs();
+          else void saveScene();
+          break;
+        case "o":
+          void openScene();
+          break;
+        case "n":
+          void newScene();
+          break;
+        default:
+          return;
+      }
+
+      e.preventDefault();
+      // Deliberately NOT stopPropagation: this handler having fired is no
+      // reason for anything else listening to go deaf, and swallowing the
+      // event here is exactly the mistake this split exists to undo.
+    };
+
+    window.addEventListener("keydown", onDocumentKeyDown, true);
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onDocumentKeyDown, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
   }, []);
 }

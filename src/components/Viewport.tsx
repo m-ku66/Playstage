@@ -1,9 +1,11 @@
-import { useMemo } from "react";
-import { Canvas } from "@react-three/fiber";
+import { useEffect, useMemo } from "react";
+import * as THREE from "three";
+import { Canvas, useThree } from "@react-three/fiber";
 import { Grid, OrbitControls } from "@react-three/drei";
 import { childrenByParent } from "../geometry/transforms";
 import { useSceneStore } from "../store/sceneStore";
 import { useEditorStore } from "../store/editorStore";
+import { useTextureStore } from "../store/textureStore";
 import { SceneObjectView } from "./SceneObjectView";
 import { SelectionGizmo } from "./SelectionGizmo";
 import { CameraRig } from "./CameraRig";
@@ -16,6 +18,27 @@ import { RulerOverlay } from "./RulerOverlay";
 const VIEWPORT_BG = "#f2f2f0";
 const GRID_CELL_COLOR = "#dcdcd7";
 const GRID_SECTION_COLOR = "#bfbfb8";
+
+/**
+ * Asks for a frame when a texture finishes decoding.
+ *
+ * `frameloop="demand"` means the canvas only draws when something tells it to.
+ * An image load resolves from a promise, outside the render that started it, so
+ * the frame that would show the newly textured face has to be requested -- the
+ * same rule the transform gizmo follows. One component watching the cache
+ * rather than an effect per object: a scene can hold hundreds of objects and
+ * they would all be asking for the same single frame.
+ */
+function TextureInvalidator() {
+  const invalidate = useThree((s) => s.invalidate);
+  const entries = useTextureStore((s) => s.entries);
+
+  useEffect(() => {
+    invalidate();
+  }, [entries, invalidate]);
+
+  return null;
+}
 
 /** Renders only root objects; each one recurses into its own children. */
 function SceneTree() {
@@ -65,7 +88,12 @@ export function Viewport() {
     <div className="relative h-full w-full">
       <Canvas
         frameloop="demand"
-        shadows
+        // Explicit shadow type rather than a bare `shadows`. R3F's default is
+        // PCFSoftShadowMap, which three no longer ships -- it warns and falls
+        // back to PCFShadowMap. Naming the one we actually get means an
+        // upgrade cannot quietly change how shadows look, and the console
+        // stays clean enough that a real warning is visible in it.
+        shadows={{ type: THREE.PCFShadowMap }}
         dpr={[1, 2]}
         // No camera prop: CameraRig owns the camera, because the projection
         // can be switched at runtime and the Canvas prop only applies once.
@@ -111,6 +139,7 @@ export function Viewport() {
         <SceneTree />
         <SelectionGizmo />
         <ViewportProbe />
+        <TextureInvalidator />
 
         {/* makeDefault lets TransformControls find and disable orbiting while a
             gizmo handle is being dragged, and publishes the orbit target that

@@ -57,6 +57,40 @@ interface EditorState {
   shortcutsOpen: boolean;
 
   /**
+   * The texture tile highlighted in the tray, if any.
+   *
+   * Like activeHotspotId, this is not a scene selection: it decides which tray
+   * tile shows its rename/remove controls, and nothing else. Clicking a tile
+   * both highlights it and applies it, so this is a record of the last thing
+   * you reached for rather than a mode you have to be in.
+   */
+  activeTextureId: string | null;
+
+  /** Whether the texture tray strip under the viewport is expanded. Collapsed
+   *  gives its height back to the viewport, which is the scarce resource. */
+  textureTrayOpen: boolean;
+
+  /**
+   * Which material slot of the selected object the inspector is editing.
+   *
+   * Held as a bare number rather than per-object, so moving between two boxes
+   * keeps you on the same face instead of resetting to Right every time --
+   * texturing the tops of six crates in a row is the common case. Readers
+   * clamp it against the current object's slot count, since selecting a
+   * cylinder while slot 5 is active would otherwise point at nothing.
+   */
+  activeSlot: number;
+
+  /**
+   * The slot being hovered in the inspector, highlighted in the viewport.
+   *
+   * Carries the object id as well as the index: the highlight has to vanish
+   * when the selection moves on, and an index alone would leave it painted on
+   * whatever got selected next.
+   */
+  highlightedSlot: { objectId: string; slot: number } | null;
+
+  /**
    * The saved camera angle being edited, if any.
    *
    * Not a selection in the scene sense -- it never ends up in the save file
@@ -85,6 +119,10 @@ interface EditorState {
   toggleEdgeRuler: () => void;
   setShortcutsOpen: (open: boolean) => void;
   setActiveHotspot: (id: string | null) => void;
+  setActiveTexture: (id: string | null) => void;
+  toggleTextureTray: () => void;
+  setActiveSlot: (slot: number) => void;
+  setHighlightedSlot: (value: { objectId: string; slot: number } | null) => void;
   toggleCollapsed: (id: string) => void;
   setCollapsed: (id: string, value: boolean) => void;
 }
@@ -108,6 +146,10 @@ export const useEditorStore = create<EditorState>((set) => ({
   showEdgeRuler: false,
   shortcutsOpen: false,
   activeHotspotId: null,
+  activeTextureId: null,
+  textureTrayOpen: true,
+  activeSlot: 0,
+  highlightedSlot: null,
 
   select: (id) => set({ selectedIds: id ? [id] : [] }),
   toggleSelected: (id) =>
@@ -128,6 +170,11 @@ export const useEditorStore = create<EditorState>((set) => ({
   toggleEdgeRuler: () => set((s) => ({ showEdgeRuler: !s.showEdgeRuler })),
   setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
   setActiveHotspot: (activeHotspotId) => set({ activeHotspotId }),
+  setActiveTexture: (activeTextureId) => set({ activeTextureId }),
+  toggleTextureTray: () =>
+    set((s) => ({ textureTrayOpen: !s.textureTrayOpen })),
+  setActiveSlot: (activeSlot) => set({ activeSlot }),
+  setHighlightedSlot: (highlightedSlot) => set({ highlightedSlot }),
 
   toggleCollapsed: (id) =>
     set((s) => ({ collapsed: { ...s.collapsed, [id]: !s.collapsed[id] } })),

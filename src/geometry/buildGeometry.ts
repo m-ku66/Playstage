@@ -1,6 +1,5 @@
 import * as THREE from "three";
 import type { GeometrySpec, PrimitiveKind } from "../types/scene";
-import { PRIMITIVE_GROUP_COUNT } from "../types/scene";
 
 /**
  * Turns a GeometrySpec into a BufferGeometry.
@@ -75,17 +74,6 @@ function buildPrimitive(
   }
 }
 
-/**
- * How many separately texturable material slots this geometry exposes.
- *
- * For primitives this is a lookup table. For generated geometry (extrude,
- * lathe, csg) we will read it off geometry.groups instead, which is why this
- * takes the spec rather than being a constant on the caller's side.
- */
-export function getGroupCount(spec: GeometrySpec): number {
-  if (spec.kind === "primitive") return PRIMITIVE_GROUP_COUNT[spec.primitive];
-  if (spec.kind === "group") return 0;
-  // Generated geometry: caller will pass the real group count once those
-  // branches exist. One slot is the safe default until then.
-  return 1;
-}
+// getGroupCount used to live here. It moved to types/scene.ts: it answers a
+// question about the scene data rather than about building a mesh, and keeping
+// it out of this module lets the stores import it without pulling in Three.

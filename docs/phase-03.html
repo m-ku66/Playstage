@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Playstage — Phase 03: Textures</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="doc.css" />
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <p class="eyebrow"><a href="roadmap.html">Roadmap</a> / Phase 03</p>
+    <h1>Textures</h1>
+    <p class="lede">Images off disk, onto individual faces, with per-face tiling and no UV unwrapping anywhere. Scenes stop being grey boxes.</p>
+    <div class="meta">
+      <span class="chip live">Import &amp; per-face done</span>
+      <span class="chip">Asset tray</span>
+      <span class="chip">Named slots</span>
+      <span class="chip">Inset planned</span>
+      <span class="chip">25 tests</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<nav class="toc">
+  <div class="toc-label">Contents</div>
+  <a href="#pipeline"><span class="num">01</span>The loading pipeline</a>
+  <a href="#sharing"><span class="num">02</span>One master, many clones</a>
+  <a href="#tray"><span class="num">03</span>The asset tray</a>
+  <a href="#faces"><span class="num">04</span>Per-face materials</a>
+  <a href="#inset"><span class="num">05</span>Planned: inset textures</a>
+  <a href="#limits"><span class="num">06</span>Known limits and open bugs</a>
+</nav>
+
+<main>
+
+<section id="pipeline">
+  <h2><span class="num">01</span>The loading pipeline</h2>
+  <p class="section-sub">A third Rust command, then a cache that lives outside the document.</p>
+
+  <p>Texture import is the first thing in Playstage that needs binary data across the IPC boundary. <code>read_image_file</code> joins the two text commands in <code>src-tauri/src/lib.rs</code>, scoped just as narrowly: one path, which the user either picked in a native dialog or which arrived in a scene file they opened. No directory listing, nothing to walk outward from.</p>
+
+<pre><code><span class="kw">fn</span> read_image_file(path: String) -&gt; Result&lt;tauri::ipc::Response, String&gt;</code></pre>
+
+  <div class="callout why">
+    <span class="k">Why Response and not Vec&lt;u8&gt;</span>
+    <p>A <code>Vec&lt;u8&gt;</code> return crosses IPC as a JSON array of decimal numbers — roughly four characters per byte, parsed one at a time. A 4 MB PNG becomes a 16 MB string and a visible stall. <code>tauri::ipc::Response</code> sends the bytes raw and the frontend receives an ArrayBuffer.</p>
+  </div>
+
+  <p>An extension whitelist and a 32 MB cap are enforced in Rust rather than left to the dialog's filter. The filter is a convenience for the user, not a guarantee, and a path can also arrive from a scene file written on another machine.</p>
+
+  <h3>Decoding</h3>
+  <p>Bytes become a Blob, a short-lived object URL, and an <code>HTMLImageElement</code>. The URL is revoked the moment the element loads; the element keeps its own decoded copy, so revoking does not invalidate the texture.</p>
+
+  <div class="callout watch">
+    <span class="k">Why not createImageBitmap</span>
+    <p>Bitmaps decode off the main thread, which is strictly better — except that the <code>imageOrientation</code> option needed to make their vertical flip agree with Three's default is unevenly supported across the webviews Tauri sits on (WebView2, WKWebView, WebKitGTK). Texture import is a handful of user-initiated loads, not a per-frame cost, so working everywhere beat shaving milliseconds off an action that happens twice a scene.</p>
+  </div>
+
+  <h3>The document holds paths, nothing else</h3>
+  <p><code>TextureAsset</code> is <code>{ id, name, path }</code>. The decoded image and its <code>THREE.Texture</code> live in <code>textureStore</code>, beside <code>nodeStore</code>, outside the document entirely.</p>
+
+  <div class="callout why">
+    <span class="k">Why a live resource cannot live in the document</span>
+    <p>The document is deep-frozen in dev, snapshotted by undo, and serialised verbatim to JSON. None of those three things can be done to a GPU resource or an object URL. The original <code>TextureAsset</code> carried a <code>dataUrl</code> field; it was removed, because a blob URL stored there would be written to disk as a dead <code>blob:</code> string and restored by undo after being revoked.</p>
+    <p>Dropping it had a second payoff: the asset became pure serialisable data, so save and load needed <em>no new code at all</em>. <code>toSceneFile</code> → <code>parseSceneFile</code> → <code>loadScene</code> → <code>useTextureSync</code> already worked end to end.</p>
+  </div>
+
+  <p>Paths are references, not copies, so a scene moved to another machine reports its textures as missing rather than silently drawing grey. Making scenes portable stays phase 06's texture-packing job, which will add an explicit embedded field and a format version bump.</p>
+
+  <h3>useTextureSync</h3>
+  <p>One effect at the app root keeps the cache in step with <code>sceneStore.textures</code>. A hook rather than a subscription inside the store, so the cache stays unaware of the document — the dependency runs one way.</p>
+  <p>This is also what makes undo free its memory. Undoing an import restores a <code>textures</code> array without the asset, <code>sync</code> sees an entry whose asset is gone, and the image is disposed instead of lingering for the session.</p>
+</section>
+
+<section id="sharing">
+  <h2><span class="num">02</span>One master, many clones</h2>
+  <p class="section-sub">The constraint that shaped the whole material layer.</p>
+
+  <p><code>repeat</code>, <code>offset</code>, <code>rotation</code> and <code>center</code> are properties of the <strong>Texture</strong>, not of the material. Two faces showing the same brick at different tilings therefore need two Texture objects — and <code>FaceMaterial</code> carries tiling per slot by design.</p>
+
+  <p>So each cache entry holds one <em>master</em> texture, and every material slot uses <code>master.clone()</code>.</p>
+
+  <div class="callout why">
+    <span class="k">Why clones are nearly free</span>
+    <p><code>clone()</code> shares the <code>source</code> — the object that owns the uploaded image — and Three ref-counts WebGL textures per source. Fifty clones of one brick are fifty small JS objects and <strong>exactly one</strong> upload to the GPU. Without the shared source this would be fifty uploads, which is how a texture system eats a graphics card.</p>
+  </div>
+
+  <div class="callout watch">
+    <span class="k">Never set needsUpdate on a clone</span>
+    <p>Its setter marks the <em>source</em> dirty, which would force a re-upload of the shared image for every clone and throw away the entire point of sharing it. The master already flagged the upload. A clone only needs its own transform, and that reaches the shader through the matrix uniform, which updates on its own.</p>
+  </div>
+
+  <h3>Disposal splits along the same line</h3>
+  <p>Whoever makes a clone disposes it — <code>SceneObjectView</code>'s cleanup effect, which also has to do it by hand, because <code>Material.dispose()</code> does not touch the textures a material references. The master is disposed only when the asset leaves the document, and the source ref count means doing so while clones are still mounted cannot pull the image out from under them.</p>
+
+  <h3>What the store does not set</h3>
+  <p>sRGB colour space, repeat wrapping and trilinear mipmapping are set on the master. Anisotropy is not: its useful maximum is a property of the renderer, which the store has no access to by design, so it is applied per clone in the viewport and capped at 8. Returns diminish sharply past that while bandwidth cost does not, and a modern card reports 16.</p>
+</section>
+
+<section id="tray">
+  <h2><span class="num">03</span>The asset tray</h2>
+  <p class="section-sub"><code>TextureTray</code>, a collapsible strip under the viewport.</p>
+
+  <p>Horizontal rather than a panel column, because a texture is recognised by its picture and a row of pictures scans faster than a list of names. Under the viewport rather than in a side panel so the thumbnails can be big enough to tell brick from cobblestone at a glance, which is the whole job of the thing. That costs viewport height, which is why it collapses.</p>
+
+  <ul>
+    <li><strong>Import…</strong> opens a multi-select native dialog — wall, road and roof in one go is the normal case</li>
+    <li><strong>Click a tile</strong> to apply it to the selection immediately; there is no assign button and no mode to enter</li>
+    <li><strong>The highlighted tile</strong> grows rename, Clear and Remove controls</li>
+    <li><strong>Missing files</strong> show a <code>lost</code> tile, a count badge in the header, and Retry</li>
+  </ul>
+
+  <p>Thumbnails are small data URLs generated at decode time, kept in the cache rather than the document. An <code>HTMLImageElement</code> is a single live DOM node and cannot be mounted in two tiles, and re-deriving one per tile per render would cost more than carrying a few kilobytes of PNG.</p>
+
+  <div class="callout why">
+    <span class="k">Assignment walks subtrees</span>
+    <p>A viewport click on a grouped object selects the <em>group</em>, and a group has no material slots of its own. If <code>setMaterialMany</code> stopped at the selection, clicking a wall of a grouped building and picking a texture would appear to do nothing at all. It expands through subtrees and skips the groups themselves.</p>
+    <p>Reaching one face of a grouped object is what the outliner and the per-face controls are for.</p>
+  </div>
+
+  <div class="callout watch">
+    <span class="k">A silent no-op is a bug report waiting to happen</span>
+    <p>Clicking a tile with nothing selected did nothing and said nothing, which reads as the feature being broken rather than as a missing selection. The header now says <em>"select an object to apply"</em> or <em>"applies to 3 selected"</em>, and tiles dim when a click cannot land. Found within fifteen minutes of first use.</p>
+  </div>
+</section>
+
+<section id="faces">
+  <h2><span class="num">04</span>Per-face materials</h2>
+  <p class="section-sub"><code>MaterialPanel</code> in the inspector. Per-face texturing with no unwrapping.</p>
+
+  <p>Three's <code>BoxGeometry</code> already ships six material groups, one per face; <code>CylinderGeometry</code> has three. Per-face texturing is therefore native — the missing piece was never UVs, it was a way to say <em>which face you mean</em>.</p>
+
+  <table>
+    <thead><tr><th>Primitive</th><th>Slots</th></tr></thead>
+    <tbody>
+      <tr><td>Box</td><td>Right · Left · Top · Bottom · Front · Back</td></tr>
+      <tr><td>Cylinder</td><td>Side · Top · Bottom</td></tr>
+      <tr><td>Cone</td><td>Side · Base</td></tr>
+      <tr><td>Sphere, Plane</td><td>Surface</td></tr>
+    </tbody>
+  </table>
+
+  <p>The names are camera-relative on purpose. <code>+x</code> and <code>+z</code> are correct and require translating from the axis gizmo every single time; "Right" and "Front" are what someone placing a texture is already thinking. Generated geometry gets numbered placeholders until phase 04 tracks what its groups correspond to — a numbered slot is honest about not knowing, where a guessed direction would not be.</p>
+
+  <h3>Hovering a chip lights the face</h3>
+  <p>This is what makes the chips trustworthy: it is how you confirm "Back" means the face you think it does. It also works when the face points away from the camera, which is precisely where clicking the face in the viewport cannot help.</p>
+
+  <div class="callout why">
+    <span class="k">How one face gets highlighted</span>
+    <p>The geometry is drawn a second time with a material array where every slot but one is <code>visible: false</code> — Three skips those groups entirely. Two module-level singleton materials shared by every highlight, deliberately never disposed: the dispose-everything rule exists because per-object allocations accumulate, and these are two materials for the lifetime of the app.</p>
+    <p>The alternative — tinting copies of the real materials — would dispose and rebuild an object's entire material set on every hover.</p>
+  </div>
+
+  <h3>Per slot</h3>
+  <p>Texture, colour (which multiplies the texture, so it doubles as a tint), tiling X/Y, Flip X/Y, offset X/Y, rotation about the face centre, draw-both-sides, and <em>Copy this face to all faces</em>.</p>
+
+  <div class="callout why">
+    <span class="k">Magnitude and direction are separate controls</span>
+    <p>The tiling fields carry magnitude; the Flip buttons carry sign. A signed <code>-3</code> sitting in a number box reads as a typo rather than as a mirror, and splitting them means the two controls cannot disagree.</p>
+  </div>
+
+  <h3>Where the logic lives</h3>
+  <p><code>src/scene/materials.ts</code> holds it as pure functions over scene data, matching <code>hierarchy.ts</code> and <code>selection.ts</code>. The store is left holding only the decision of when to call it and what to record on the undo stack.</p>
+
+  <div class="callout watch">
+    <span class="k">Returning the same reference matters twice</span>
+    <p>Every function returns the identical array when nothing changed. History snapshots share structure with the live document, and the store decides whether an edit happened at all by reference equality — so a helper that returned a fresh array after changing nothing would spend a Ctrl+Z press on a no-op. Three harness cases pin this down.</p>
+  </div>
+
+  <p><code>verify-materials.mjs</code> is the tenth harness, 25 cases. One of them iterates <code>PRIMITIVE_GROUP_COUNT</code> and asserts the label count matches, so adding a primitive in phase 04 and forgetting its slot names fails immediately rather than shipping a panel with a missing chip.</p>
+</section>
+
+<section id="inset">
+  <h2><span class="num">05</span>Planned: inset textures</h2>
+  <p class="section-sub">A sign on a wall. Not built yet — this is the design.</p>
+
+  <p>Today a texture always covers its whole face. The wanted behaviour is a decal: the image occupies a sub-rectangle of the face, with flat colour around it. A poster, a sign, a window.</p>
+
+  <div class="callout watch">
+    <span class="k">Why the naive version looks broken</span>
+    <p>Clamped wrapping plus a scaled UV transform places the image in a sub-rectangle perfectly well — and then fills the area around it with the image's <strong>edge pixels, smeared outward</strong>. That smear, not the placement, is the actual problem to solve.</p>
+  </div>
+
+  <h3>The approach</h3>
+  <p>Patch one line of <code>MeshStandardMaterial</code>'s fragment shader through <code>onBeforeCompile</code>, replacing <code>#include &lt;map_fragment&gt;</code> with a version that only multiplies the texture in when the UV falls inside <code>[0,1]</code>:</p>
+
+<pre><code><span class="c">// outside the window, diffuseColor is left as the material colour</span>
+<span class="kw">if</span> ( uv.x &gt;= 0.0 &amp;&amp; uv.x &lt;= 1.0 &amp;&amp; uv.y &gt;= 0.0 &amp;&amp; uv.y &lt;= 1.0 ) {
+  diffuseColor *= texture2D( map, uv );
+}</code></pre>
+
+  <p>That gives a genuine flat surround, on <strong>any</strong> geometry, with no second mesh and no extra GPU upload. Clone sharing survives intact.</p>
+
+  <h3>What makes it safe rather than clever</h3>
+  <ul>
+    <li><code>customProgramCacheKey</code>, so Three does not hand inset and non-inset materials the same compiled program.</li>
+    <li><strong>Graceful degradation.</strong> If that shader chunk is ever renamed in a Three upgrade, the string replace misses and the face renders full-cover instead of throwing.</li>
+  </ul>
+
+  <h3>Data model</h3>
+  <p><code>FaceMaterial</code> gains <code>inset: { x, y, width, height } | null</code>, with <code>null</code> meaning cover — today's behaviour, so every existing scene is unaffected and no version bump is needed.</p>
+
+  <p>Inset and tiling become mutually exclusive: inside a window the image is placed once. The tiling fields grey out with a note rather than letting two controls quietly fight over the same UV transform.</p>
+
+  <div class="callout why">
+    <span class="k">The part that cannot be tested</span>
+    <p>The data model, the parsing and the round trip are all harness-testable. Whether the surround actually reads as flat colour is not — <code>tsc</code> and Node cannot run a shader. That one needs an eyeball.</p>
+  </div>
+</section>
+
+<section id="limits">
+  <h2><span class="num">06</span>Known limits and open bugs</h2>
+  <p class="section-sub">What is outstanding, and one live regression.</p>
+
+  <div class="callout watch">
+    <span class="k">OPEN BUG — Ctrl+S does not fire, Ctrl+Z is unreliable</span>
+    <p>The toolbar Save button works, and the save path is proven: a fully textured document with negative tiling and a Windows path serialises and round-trips correctly. So <code>saveScene()</code> is sound and simply is not being reached from the keyboard.</p>
+    <p>Every <code>stopPropagation</code> in <code>src</code> was audited — all seven in the Outliner are on click and drag, <code>AddMenu</code>'s capture listener only touches Escape, and <code>NumberField</code>'s <code>onKeyDown</code> only blurs on Enter. <strong>Nothing in the code eats the key.</strong></p>
+    <p>The document and history shortcuts were moved to a <strong>capture-phase</strong> listener on window as a result. That did <em>not</em> fix the symptom, but it is the right structure regardless: the main handler is bubble-phase on window, and React attaches its listeners at the root container below window, so one <code>stopPropagation</code> anywhere could silently kill every global shortcut while that element held focus.</p>
+    <p>Next suspect: WebView2 consuming the accelerator before the page sees it, which is a Rust-side setting rather than anything in the frontend. That Ctrl+Z is also affected points the same way — the common factor is the modifier, not the letter.</p>
+  </div>
+
+  <ul class="check">
+    <li class="off"><span class="mark">—</span><strong>No viewport face picking.</strong> Clicking a face to target its slot is not wired up. <code>intersection.face.materialIndex</code> hands it over for free, so this is a targeting mode rather than new maths.</li>
+    <li class="off"><span class="mark">—</span><strong>No material presets.</strong> A named <code>FaceMaterial</code> reusable across a scene, as the roadmap lists.</li>
+    <li class="off"><span class="mark">—</span><strong>No flat-colour or wireframe render modes</strong> for clean draw-over references. View state, so <code>editorStore</code> rather than the document.</li>
+    <li class="off"><span class="mark">—</span><strong>No inset textures.</strong> Designed above, not built.</li>
+    <li class="off"><span class="mark">—</span><strong>No real-world scale lock.</strong> Tiling is in UV repeats, so a brick texture stretches when the wall does. Deriving tiling from the face's world dimensions was considered and deferred.</li>
+    <li class="off"><span class="mark">—</span><strong>The texture dropdown is a native <code>select</code></strong>, so it renders with OS chrome that does not match the rest of the panel. Functional, slightly off-key.</li>
+    <li class="off"><span class="mark">—</span><strong>No drag-and-drop import.</strong> Native file-drop is disabled app-wide, so the dialog is the only way in.</li>
+    <li class="off"><span class="mark">—</span><strong>No texture packing</strong>, so a scene is not portable between machines. Phase 06.</li>
+  </ul>
+</section>
+
+<footer>
+  Phase 03 · import and per-face materials complete; inset, presets and render modes outstanding · back to the <a href="roadmap.html">roadmap</a>
+</footer>
+
+</main>
+</div>
+</body>
+</html>

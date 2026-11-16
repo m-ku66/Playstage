@@ -24,6 +24,7 @@
       <span class="chip">Tailwind v4</span>
       <span class="chip">three-bvh-csg</span>
       <span class="chip live">01 · 02 · 05 complete</span>
+      <span class="chip">03 part done</span>
       <span class="chip open">06 part done</span>
     </div>
   </div>
@@ -224,16 +225,18 @@
       <div class="phase-head">
         <span class="phase-n">03</span>
         <span class="phase-title">Textures</span>
-        <span class="tag next">Next</span>
+        <span class="tag next">In progress</span>
       </div>
       <ul>
-        <li><strong>Texture import</strong> and an asset tray</li>
-        <li><strong>Per-face assignment</strong> — click a face, assign a texture</li>
-        <li><strong>UV controls</strong> — tiling, offset, rotation, flip, per face</li>
+        <li><strong>Texture import</strong> and an asset tray — <b>done</b>, a collapsible strip under the viewport</li>
+        <li><strong>Per-face assignment</strong> — <b>done</b> via named slot chips in the inspector, with hover-to-highlight; clicking the face in the viewport is still to come</li>
+        <li><strong>UV controls</strong> — <b>done</b>: tiling, offset, rotation and flip, per face</li>
+        <li><strong>Inset textures</strong> — a decal in a sub-rectangle of a face, flat colour around it. Designed, not built</li>
         <li><strong>Material presets</strong> you can reuse across a scene</li>
         <li><strong>Flat colour and wireframe modes</strong> for clean draw-over references</li>
       </ul>
       <div class="ships"><b>Ships</b>Scenes stop being grey boxes.</div>
+      <div class="links">→ <a href="phase-03.html">Phase 03 milestone doc</a> · import and per-face materials work; one open bug — Ctrl+S does not fire from the keyboard</div>
       <div class="links">Note: native file-drop is off (see phase 02), so texture import needs a file dialog rather than a drop target.</div>
     </div>
 
@@ -410,12 +413,13 @@ npm run verify        <span class="c"># all nine test harnesses</span></code></p
 </section>
 
 <footer>
-  Playstage roadmap · phases 01, 02 and 05 complete, 06 half done · milestone docs:
+  Playstage roadmap · phases 01, 02 and 05 complete, 03 and 06 part done · milestone docs:
   <a href="phase-02.html">02</a> ·
   <a href="interaction.html">interaction</a> ·
   <a href="phase-05.html">05</a> ·
   <a href="phase-06.html">06</a>
-  · next up phase 03, textures.
+  · <a href="phase-03.html">03</a>
+  · next up: finishing phase 03 — inset textures, presets and render modes.
 </footer>
 
 </main>

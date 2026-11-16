@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import type { SceneObject, Vec3 } from "../types/scene";
 import { PRIMITIVE_PARAMS } from "../types/scene";
 import { geometrySize } from "../geometry/measure";
@@ -11,19 +10,10 @@ import { formatLength } from "../scene/units";
 import { useSceneStore, useSelectedObject } from "../store/sceneStore";
 import { useEditorStore, useSelectedIds } from "../store/editorStore";
 import { NumberField } from "./NumberField";
+import { Field, PanelButton } from "./PanelKit";
+import { MaterialPanel } from "./MaterialPanel";
 
 const DEG = 180 / Math.PI;
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="px-4 py-3">
-      <div className="mb-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-stage-faint">
-        {label}
-      </div>
-      {children}
-    </div>
-  );
-}
 
 function VectorInput({
   value,
@@ -87,30 +77,6 @@ function ShapeParams({ object }: { object: SceneObject }) {
   );
 }
 
-/** Small text button for the batch actions below. */
-function BatchButton({
-  label,
-  danger,
-  onClick,
-}: {
-  label: string;
-  danger?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`w-full rounded-md border border-stage-line bg-stage-field px-2 py-1.5 text-left text-[12px] transition-colors ${
-        danger
-          ? "text-stage-muted hover:border-stage-warn hover:text-stage-warn"
-          : "text-stage-muted hover:border-stage-accent hover:text-stage-accent"
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
 /**
  * What the panel shows when more than one object is selected.
  *
@@ -139,28 +105,28 @@ function MultiSelection({ ids }: { ids: string[] }) {
     <div className="flex-1 divide-y divide-stage-line overflow-y-auto">
       <Field label={`${ids.length} objects selected`}>
         <div className="space-y-1.5">
-          <BatchButton
+          <PanelButton
             label={anyVisible ? "Hide all" : "Show all"}
             onClick={() => setVisibleMany(ids, !anyVisible)}
           />
-          <BatchButton
+          <PanelButton
             label={anyUnlocked ? "Lock all" : "Unlock all"}
             onClick={() => setLockedMany(ids, anyUnlocked)}
           />
-          <BatchButton
+          <PanelButton
             label="Group these"
             onClick={() => groupSelection()}
           />
-          <BatchButton
+          <PanelButton
             label="Duplicate all"
             onClick={() => duplicateObjects(ids)}
           />
-          <BatchButton
+          <PanelButton
             label="Delete all"
             danger
             onClick={() => deleteObjects(ids)}
           />
-          <BatchButton label="Deselect" onClick={clearSelection} />
+          <PanelButton label="Deselect" onClick={clearSelection} />
         </div>
       </Field>
 
@@ -278,13 +244,15 @@ export function Inspector() {
 
           <SizeReadout object={object} />
 
+          <MaterialPanel object={object} />
+
           {object.geometry.kind === "group" && (
             <Field label="Group">
               <p className="mb-2 text-[12px] leading-relaxed text-stage-faint">
                 A group has no shape of its own. Move it to move everything
                 inside it.
               </p>
-              <BatchButton
+              <PanelButton
                 label="Ungroup"
                 onClick={() => ungroupSelection()}
               />

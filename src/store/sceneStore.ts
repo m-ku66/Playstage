@@ -36,6 +36,12 @@ import {
   uniqueName,
 } from "../scene/hierarchy";
 import { topmostIds } from "../scene/selection";
+import {
+  clearTextureReferences,
+  patchFaceMaterial,
+  patchMaterialsMany,
+  resolveTextureImports,
+} from "../scene/materials";
 import type { CameraPose } from "../scene/hotspots";
 import { clampFov, makeHotspot } from "../scene/hotspots";
 
@@ -139,6 +145,41 @@ interface SceneState {
    */
   setLocked: (id: string, locked: boolean) => void;
   setLockedMany: (ids: readonly string[], locked: boolean) => void;
+
+  /* --- textures --- */
+  /**
+   * Imports texture assets by path. Returns one id per entry passed in.
+   *
+   * A path already in the scene yields the existing asset's id rather than a
+   * second copy of it: two tray tiles of the same brick, with separate names
+   * and separate edits, is confusion rather than a feature.
+   */
+  addTextures: (entries: readonly { name: string; path: string }[]) => string[];
+  /** Removes a texture AND clears every material slot that referenced it. */
+  removeTexture: (id: string) => void;
+  renameTexture: (id: string, name: string) => void;
+
+  /* --- materials --- */
+  /** Patches one material slot of one object. */
+  setFaceMaterial: (
+    id: string,
+    slot: number,
+    patch: Partial<FaceMaterial>,
+  ) => void;
+  /**
+   * Patches every material slot of every mesh in the given subtrees.
+   *
+   * Subtrees, not just the listed objects, because a viewport click on a
+   * grouped object selects the GROUP, and a group has no material slots of its
+   * own. If assignment stopped at the selection, clicking a wall of a grouped
+   * building and picking a texture would appear to do nothing at all. Reaching
+   * one face of a grouped object is what the outliner and the per-face
+   * controls are for.
+   */
+  setMaterialMany: (
+    ids: readonly string[],
+    patch: Partial<FaceMaterial>,
+  ) => void;
 
   /* --- camera hotspots --- */
   /** Saves a captured camera pose as a new angle. Returns its id. */
@@ -543,6 +584,73 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       objects: s.objects.map((o) => (target.has(o.id) ? { ...o, locked } : o)),
       dirty: true,
     }));
+  },
+
+  /* ---------------- textures ---------------- */
+
+  addTextures: (entries) => {
+    if (entries.length === 0) return [];
+
+    const { added, ids } = resolveTextureImports(get().textures, entries, uid);
+
+    // Every path was already in the scene, so this import added nothing. No
+    // document change means no undo entry: Ctrl+Z should not consume a press
+    // undoing something that did not happen.
+    if (added.length === 0) return ids;
+
+    record(get(), "texture:add");
+    set((s) => ({ textures: [...s.textures, ...added], dirty: true }));
+    return ids;
+  },
+
+  removeTexture: (id) => {
+    if (!get().textures.some((t) => t.id === id)) return;
+
+    record(get(), "texture:remove");
+
+    // Asset and references go in the same entry, so no point in the undo
+    // stack has a slot pointing at a texture the document does not hold.
+    set((s) => ({
+      textures: s.textures.filter((t) => t.id !== id),
+      objects: clearTextureReferences(s.objects, id) as SceneObject[],
+      dirty: true,
+    }));
+
+    const editor = useEditorStore.getState();
+    if (editor.activeTextureId === id) editor.setActiveTexture(null);
+  },
+
+  renameTexture: (id, name) => {
+    record(get(), `texture:rename:${id}`, true);
+    set((s) => ({
+      textures: s.textures.map((t) => (t.id === id ? { ...t, name } : t)),
+      dirty: true,
+    }));
+  },
+
+  /* ---------------- materials ---------------- */
+
+  setFaceMaterial: (id, slot, patch) => {
+    const objects = get().objects;
+    const next = patchFaceMaterial(objects, id, slot, patch);
+    if (next === objects) return;
+
+    record(get(), `material:${id}:${slot}`, true);
+    set({ objects: next as SceneObject[], dirty: true });
+  },
+
+  setMaterialMany: (ids, patch) => {
+    if (ids.length === 0) return;
+
+    const objects = get().objects;
+    const next = patchMaterialsMany(objects, ids, patch);
+    // Reference equality rather than a deep compare: the pure helpers return
+    // the original array when they touched nothing, which is the case when the
+    // selection holds only empty groups.
+    if (next === objects) return;
+
+    record(get(), "material:many");
+    set({ objects: next as SceneObject[], dirty: true });
   },
 
   /* ---------------- camera hotspots ---------------- */

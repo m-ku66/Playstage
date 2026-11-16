@@ -10,6 +10,21 @@ use std::path::{Path, PathBuf};
 /// of trying to allocate it.
 const MAX_SCENE_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Hard ceiling on a single texture image.
+///
+/// Textures here are flat surface detail -- brick, siding, asphalt -- not
+/// photographic plates, so anything past a few megabytes is already far more
+/// resolution than a drawn-over panel can show. The cap stops a 200 MP scan
+/// dragged in by mistake from stalling the webview mid-decode.
+const MAX_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Image formats the webview can decode on every platform we ship to.
+///
+/// Checked here rather than trusting the dialog's filter: the filter is a
+/// convenience for the user, not a guarantee, and a path can also arrive from
+/// a scene file written on another machine.
+const IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "webp", "bmp"];
+
 /// Turns any io error into a string the frontend can show the user.
 ///
 /// Tauri commands have to return a serialisable error, and `io::Error` is not.
@@ -86,12 +101,61 @@ fn write_text_file(path: String, contents: String) -> Result<(), String> {
     })
 }
 
+/// Reads an image file as raw bytes, for import as a texture.
+///
+/// Returns `tauri::ipc::Response` rather than `Vec<u8>`. A plain `Vec<u8>`
+/// crosses the IPC boundary as a JSON array of decimal numbers -- roughly four
+/// characters per byte, parsed one at a time -- which turns a 4 MB PNG into a
+/// 16 MB string and a visible stall. `Response` sends the bytes raw and the
+/// frontend receives an ArrayBuffer.
+///
+/// Scoped as narrowly as the two text commands above: one path, which the user
+/// either just picked in a native dialog or which came from the scene file
+/// they opened. Nothing here can list a directory or walk outward.
+#[tauri::command]
+fn read_image_file(path: String) -> Result<tauri::ipc::Response, String> {
+    let path = PathBuf::from(path);
+
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+
+    if !IMAGE_EXTENSIONS.contains(&extension.as_str()) {
+        return Err(format!(
+            "{}: not an image Playstage can read (expected {})",
+            path.display(),
+            IMAGE_EXTENSIONS.join(", ")
+        ));
+    }
+
+    let meta = fs::metadata(&path).map_err(|e| describe(&path, &e))?;
+    if !meta.is_file() {
+        return Err(format!("{}: not a file", path.display()));
+    }
+    if meta.len() > MAX_IMAGE_BYTES {
+        return Err(format!(
+            "{}: image is {:.1} MB, which is larger than Playstage will load",
+            path.display(),
+            meta.len() as f64 / (1024.0 * 1024.0)
+        ));
+    }
+
+    let bytes = fs::read(&path).map_err(|e| describe(&path, &e))?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![read_text_file, write_text_file])
+        .invoke_handler(tauri::generate_handler![
+            read_text_file,
+            write_text_file,
+            read_image_file
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

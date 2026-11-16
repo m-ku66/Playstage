@@ -208,7 +208,6 @@ function parseTextures(value: unknown, warnings: string[]): TextureAsset[] {
       id,
       name: asString(entry.name, "Texture"),
       path: asString(entry.path, ""),
-      dataUrl: typeof entry.dataUrl === "string" ? entry.dataUrl : null,
     });
   }
 

@@ -66,13 +66,27 @@ export interface FaceMaterial {
   doubleSided: boolean;
 }
 
+/**
+ * A texture the scene refers to, by path.
+ *
+ * Deliberately inert data: an id, a display name and a location on disk.
+ * The decoded image and its THREE.Texture live in textureStore, outside the
+ * document, for the same reason live Three objects live in nodeStore -- the
+ * document is frozen in dev, snapshotted by undo, and serialised verbatim to
+ * JSON, and none of those three things can be done to a GPU resource or an
+ * object URL. A blob URL stored here would be written to disk as a dead
+ * `blob:` string and restored by undo after being revoked.
+ *
+ * Paths are references, not copies, so a scene moved to another machine
+ * reports its textures as missing rather than silently drawing grey. Making
+ * scenes portable is phase 06's texture-packing job, which will add an
+ * explicit embedded field and a format version bump.
+ */
 export interface TextureAsset {
   id: string;
   name: string;
-  /** Path on disk, resolved at load time. Empty while the asset is unsaved. */
+  /** Absolute path on disk, as the file picker returned it. */
   path: string;
-  /** Data URL kept in memory for the live session. */
-  dataUrl: string | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -246,6 +260,56 @@ export const PRIMITIVE_GROUP_COUNT: Record<PrimitiveKind, number> = {
   cone: 2, // side, base cap
   plane: 1,
 };
+
+/**
+ * Human names for each material slot, in the order Three builds its groups.
+ *
+ * BoxGeometry emits its six groups as +x, -x, +y, -y, +z, -z, which is the
+ * order below. The names are camera-relative on purpose -- "Right" and "Front"
+ * are what someone placing a texture is thinking, where "+x" and "+z" require
+ * translating from the axis gizmo every time.
+ *
+ * A sphere and a plane have one slot each, so naming it after a direction
+ * would be a lie; they get "Surface".
+ */
+export const MATERIAL_SLOT_LABELS: Record<PrimitiveKind, readonly string[]> = {
+  box: ["Right", "Left", "Top", "Bottom", "Front", "Back"],
+  sphere: ["Surface"],
+  cylinder: ["Side", "Top", "Bottom"],
+  cone: ["Side", "Base"],
+  plane: ["Surface"],
+};
+
+/**
+ * Slot names for any geometry. Empty for a group, which has no slots.
+ *
+ * Generated geometry gets numbered placeholders until phase 04 tracks what its
+ * groups actually correspond to -- a numbered slot is honest about not knowing,
+ * where a guessed direction would not be.
+ */
+export function slotLabels(spec: GeometrySpec): readonly string[] {
+  if (spec.kind === "group") return [];
+  if (spec.kind === "primitive") return MATERIAL_SLOT_LABELS[spec.primitive];
+  return Array.from({ length: getGroupCount(spec) }, (_, i) => `Slot ${i + 1}`);
+}
+
+/**
+ * How many separately texturable material slots a geometry exposes.
+ *
+ * Lives here rather than next to buildGeometry because it is a question about
+ * the data, not about building a mesh -- which means the stores can ask it
+ * without dragging Three.js into the store layer or into the Node test
+ * harnesses that import them.
+ *
+ * For primitives this is the lookup table above. Generated geometry (extrude,
+ * lathe, csg) will read its real count off geometry.groups once those branches
+ * exist; one slot is the safe answer until then.
+ */
+export function getGroupCount(spec: GeometrySpec): number {
+  if (spec.kind === "primitive") return PRIMITIVE_GROUP_COUNT[spec.primitive];
+  if (spec.kind === "group") return 0;
+  return 1;
+}
 
 export const IDENTITY_TRANSFORM: Transform = {
   position: [0, 0, 0],
